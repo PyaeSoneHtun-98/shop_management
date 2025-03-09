@@ -24,9 +24,9 @@ CREATE TABLE purchases (
   user_id INT NOT NULL,
   buy_date DATE NOT NULL,
   immediate BOOLEAN NOT NULL DEFAULT TRUE,
-  deposit_percentage DECIMAL(5,2) NOT NULL DEFAULT 0.00,
+  interest_percentage DECIMAL(5,2) NOT NULL DEFAULT 0.00,
   total_amount DECIMAL(10,2) NOT NULL,
-  due_date DATE,
+  paid_date DATE DEFAULT NULL,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE RESTRICT
@@ -40,8 +40,8 @@ VALUES
   ('Robert Johnson', 'robert@example.com', '555-9012', '789 Pine Rd, Elsewhere');
 
 -- Add some sample data
-INSERT INTO purchases (user_id, buy_date, immediate, deposit_percentage, total_amount, due_date)
+INSERT INTO purchases (user_id, buy_date, immediate, interest_percentage, total_amount, paid_date)
 VALUES
-  (1, '2023-05-15', FALSE, 30.00, 5000.00, '2023-06-15'),
-  (2, '2023-05-20', TRUE, 0.00, 3500.00, NULL),
-  (3, '2023-05-25', FALSE, 25.00, 7500.00, '2023-08-01');
+  (1, '2023-05-15', FALSE, 10.00, 5000.00, NULL),
+  (2, '2023-05-20', TRUE, 0.00, 3500.00, '2023-05-20'),
+  (3, '2023-05-25', FALSE, 15.00, 7500.00, NULL);

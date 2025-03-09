@@ -16,6 +16,7 @@ function PurchaseList() {
   const [filterType, setFilterType] = useState('all');
   const [isPaying, setIsPaying] = useState({});
   const [successMessage, setSuccessMessage] = useState('');
+  const [activeTab, setActiveTab] = useState('immediate'); // 'immediate' or 'credit'
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -55,38 +56,111 @@ function PurchaseList() {
     }
   };
 
-  const calculateRemainingAmount = (total, depositPercentage) => {
-    const depositAmount = (total * depositPercentage) / 100;
-    return total - depositAmount;
+  // Calculate months between two dates
+  const calculateMonthsBetween = (startDate, endDate) => {
+    const start = new Date(startDate);
+    const end = new Date(endDate);
+    const yearDiff = end.getFullYear() - start.getFullYear();
+    const monthDiff = end.getMonth() - start.getMonth();
+    const dayDiff = end.getDate() - start.getDate();
+    
+    // Calculate total months with decimal for partial months
+    let months = yearDiff * 12 + monthDiff;
+    
+    // Add partial month based on days
+    if (dayDiff > 0) {
+      const daysInMonth = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
+      months += dayDiff / daysInMonth;
+    } else if (dayDiff < 0) {
+      const daysInPrevMonth = new Date(end.getFullYear(), end.getMonth(), 0).getDate();
+      months -= Math.abs(dayDiff) / daysInPrevMonth;
+    }
+    
+    // Ensure we don't return negative months
+    return Math.max(0, months);
+  };
+
+  // Calculate interest amount based on monthly interest rate and elapsed time
+  const calculateInterestAmount = (principal, interestPercentage, buyDate, paidDate) => {
+    // If the purchase is paid, calculate interest only up to the paid date
+    // Otherwise, calculate interest up to today
+    const endDate = paidDate ? new Date(paidDate) : new Date();
+    
+    // Monthly interest rate (3%)
+    const monthlyInterestRate = 3;
+    
+    // Calculate months between purchase date and end date
+    const months = calculateMonthsBetween(buyDate, endDate);
+    
+    // Calculate total interest percentage based on elapsed months
+    const totalInterestPercentage = monthlyInterestRate * months;
+    
+    // Calculate interest amount
+    return (principal * totalInterestPercentage) / 100;
+  };
+
+  // Calculate total amount with interest
+  const calculateTotalWithInterest = (principal, interestPercentage, buyDate, paidDate) => {
+    const interestAmount = calculateInterestAmount(principal, interestPercentage, buyDate, paidDate);
+    return principal + interestAmount;
   };
 
   const handleExportToExcel = () => {
     // Prepare data for export
-    const exportData = filteredPurchases.map(purchase => ({
-      'Customer': purchase.user_name,
-      'Buy Date': purchase.buy_date ? format(new Date(purchase.buy_date), 'MMM dd, yyyy') : '-',
-      'Due Date': purchase.due_date ? format(new Date(purchase.due_date), 'MMM dd, yyyy') : '-',
-      'Total Amount': `$${Number(purchase.total_amount).toFixed(2)}`,
-      'Payment Method': purchase.immediate ? 'Paid' : 'Deposit',
-      'Deposit %': purchase.immediate ? '-' : `${purchase.deposit_percentage}%`,
-      'Remaining': purchase.immediate ? '-' : `$${calculateRemainingAmount(Number(purchase.total_amount), purchase.deposit_percentage).toFixed(2)}`
-    }));
+    const exportData = filteredPurchases.map(purchase => {
+      if (activeTab === 'immediate') {
+        return {
+          'Customer': purchase.user_name,
+          'Buy Date': purchase.buy_date ? format(new Date(purchase.buy_date), 'MMM dd, yyyy') : '-',
+          'Paid Date': purchase.paid_date ? format(new Date(purchase.paid_date), 'MMM dd, yyyy') : '-',
+          'Amount': `$${Number(purchase.total_amount).toFixed(2)}`
+        };
+      } else {
+        const principal = Number(purchase.total_amount);
+        const months = calculateMonthsBetween(purchase.buy_date, purchase.paid_date || new Date());
+        const interestAmount = calculateInterestAmount(principal, 3, purchase.buy_date, purchase.paid_date);
+        const totalWithInterest = calculateTotalWithInterest(principal, 3, purchase.buy_date, purchase.paid_date);
+        
+        return {
+          'Customer': purchase.user_name,
+          'Buy Date': purchase.buy_date ? format(new Date(purchase.buy_date), 'MMM dd, yyyy') : '-',
+          'Principal Amount': `$${principal.toFixed(2)}`,
+          'Months': months.toFixed(1),
+          'Monthly Rate': '3%',
+          'Interest Amount': `$${interestAmount.toFixed(2)}`,
+          'Total with Interest': `$${totalWithInterest.toFixed(2)}`,
+          'Status': purchase.paid_date ? `Paid on ${format(new Date(purchase.paid_date), 'MMM dd, yyyy')}` : 'Unpaid'
+        };
+      }
+    });
 
     // Create worksheet
     const worksheet = XLSX.utils.json_to_sheet(exportData);
     
     // Create workbook
     const workbook = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(workbook, worksheet, 'Purchases');
+    XLSX.utils.book_append_sheet(workbook, worksheet, activeTab === 'immediate' ? 'Immediate Purchases' : 'Credit Purchases');
     
     // Generate Excel file and trigger download
-    XLSX.writeFile(workbook, 'purchase_list.xlsx');
+    XLSX.writeFile(workbook, activeTab === 'immediate' ? 'immediate_purchases.xlsx' : 'credit_purchases.xlsx');
   };
 
   if (loading) return <div className="text-center py-4">Loading...</div>;
   if (error) return <div className="text-red-500 py-4">{error}</div>;
 
-  const columns = [
+  // Filter purchases based on active tab
+  const filteredPurchases = purchases.filter(purchase => {
+    if (activeTab === 'immediate') {
+      // Only show purchases that were immediate from the beginning
+      return purchase.immediate === 1 || purchase.immediate === true;
+    } else {
+      // Show all credit purchases, whether paid or not
+      return purchase.interest_percentage > 0;
+    }
+  });
+
+  // Define columns based on active tab
+  const immediateColumns = [
     {
       name: 'Customer',
       selector: row => row.user_name,
@@ -110,60 +184,24 @@ function PurchaseList() {
       )
     },
     {
-      name: 'Due Date',
-      selector: row => row.due_date,
+      name: 'Paid Date',
+      selector: row => row.paid_date,
       sortable: true,
       cell: row => (
         <div className="flex items-center">
-          <FaClock className="text-gray-400 mr-2" />
-          <span>{row.due_date ? format(new Date(row.due_date), 'MMM dd, yyyy') : '-'}</span>
+          <FaCalendarAlt className="text-gray-400 mr-2" />
+          <span>{row.paid_date ? format(new Date(row.paid_date), 'MMM dd, yyyy') : '-'}</span>
         </div>
       )
     },
     {
-      name: 'Total Amount',
+      name: 'Amount',
       selector: row => row.total_amount,
       sortable: true,
       cell: row => (
         <div className="flex items-center">
           <FaDollarSign className="text-gray-400 mr-2" />
           <span className="font-medium">${Number(row.total_amount).toFixed(2)}</span>
-        </div>
-      )
-    },
-    {
-      name: 'Payment Method',
-      selector: row => row.immediate,
-      sortable: true,
-      cell: row => (
-        <div className="flex items-center">
-          <FaCheckCircle className={row.immediate ? "text-green-500 mr-2" : "text-red-500 mr-2"} />
-          <span className={row.immediate ? "font-medium text-green-600" : "text-red-500"}>
-            {row.immediate ? 'Paid' : 'Deposit'}
-            {/* {row.immediate && <FaCheckCircle className="ml-1 text-green-500" />} */}
-          </span>
-        </div>
-      )
-    },
-    {
-      name: 'Deposit %',
-      selector: row => row.deposit_percentage,
-      sortable: true,
-      cell: row => (
-        <div className="flex items-center">
-          <FaPercentage className="text-gray-400 mr-2" />
-          <span>{row.immediate ? '-' : `${row.deposit_percentage}%`}</span>
-        </div>
-      )
-    },
-    {
-      name: 'Remaining',
-      selector: row => calculateRemainingAmount(Number(row.total_amount), row.deposit_percentage),
-      sortable: true,
-      cell: row => (
-        <div className="flex items-center">
-          <FaDollarSign className="text-gray-400 mr-2" />
-          <span>{row.immediate ? '-' : `$${calculateRemainingAmount(Number(row.total_amount), row.deposit_percentage).toFixed(2)}`}</span>
         </div>
       )
     },
@@ -185,7 +223,133 @@ function PurchaseList() {
           >
             <FaEdit />
           </Link>
-          {!row.immediate && (
+          <button
+            onClick={() => handleDelete(row.id)}
+            className="text-red-600 hover:text-red-800 transition-colors duration-200 flex items-center"
+            title="Delete Purchase"
+          >
+            <FaTrash />
+          </button>
+        </div>
+      )
+    }
+  ];
+
+  const creditColumns = [
+    {
+      name: 'Customer',
+      selector: row => row.user_name,
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          <FaUser className="text-gray-400 mr-2" />
+          <span className="font-medium">{row.user_name}</span>
+        </div>
+      )
+    },
+    {
+      name: 'Buy Date',
+      selector: row => row.buy_date,
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          <FaCalendarAlt className="text-gray-400 mr-2" />
+          <span>{format(new Date(row.buy_date), 'MMM dd, yyyy')}</span>
+        </div>
+      )
+    },
+    {
+      name: 'Principal',
+      selector: row => row.total_amount,
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          <FaDollarSign className="text-gray-400 mr-2" />
+          <span className="font-medium">${Number(row.total_amount).toFixed(2)}</span>
+        </div>
+      )
+    },
+    {
+      name: 'Months',
+      selector: row => calculateMonthsBetween(row.buy_date, row.paid_date || new Date()),
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          <FaClock className="text-gray-400 mr-2" />
+          <span>{calculateMonthsBetween(row.buy_date, row.paid_date || new Date()).toFixed(1)}</span>
+        </div>
+      )
+    },
+    {
+      name: 'Monthly Rate',
+      selector: row => 3, // Fixed 3% monthly rate
+      sortable: false,
+      cell: row => (
+        <div className="flex items-center">
+          <FaPercentage className="text-gray-400 mr-2" />
+          <span>3%</span>
+        </div>
+      )
+    },
+    {
+      name: 'Interest Amount',
+      selector: row => calculateInterestAmount(Number(row.total_amount), 3, row.buy_date, row.paid_date),
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          <FaDollarSign className="text-gray-400 mr-2" />
+          <span>${calculateInterestAmount(Number(row.total_amount), 3, row.buy_date, row.paid_date).toFixed(2)}</span>
+        </div>
+      )
+    },
+    {
+      name: 'Total with Interest',
+      selector: row => calculateTotalWithInterest(Number(row.total_amount), 3, row.buy_date, row.paid_date),
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          <FaDollarSign className="text-gray-400 mr-2" />
+          <span className="font-medium">${calculateTotalWithInterest(Number(row.total_amount), 3, row.buy_date, row.paid_date).toFixed(2)}</span>
+        </div>
+      )
+    },
+    {
+      name: 'Status',
+      selector: row => row.paid_date ? 'Paid' : 'Unpaid',
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          {row.paid_date ? (
+            <span className="px-2 py-1 bg-green-900 text-green-300 rounded-full text-xs font-semibold">
+              Paid on {format(new Date(row.paid_date), 'MMM dd, yyyy')}
+            </span>
+          ) : (
+            <span className="px-2 py-1 bg-yellow-900 text-yellow-300 rounded-full text-xs font-semibold">
+              Unpaid
+            </span>
+          )}
+        </div>
+      )
+    },
+    {
+      name: 'Actions',
+      cell: row => (
+        <div className="flex space-x-3">
+          <Link
+            to={`/purchases/${row.id}`}
+            className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center"
+            title="View Details"
+          >
+            <FaEye />
+          </Link>
+          <Link
+            to={`/edit/${row.id}`}
+            className="text-green-600 hover:text-green-800 transition-colors duration-200 flex items-center"
+            title="Edit Purchase"
+          >
+            <FaEdit />
+          </Link>
+          {!row.paid_date ? (
             <button
               onClick={() => handleMarkAsPaid(row.id)}
               disabled={isPaying[row.id]}
@@ -193,6 +357,17 @@ function PurchaseList() {
               title="Mark as Paid"
             >
               <FaCheckCircle />
+            </button>
+          ) : (
+            <button
+              onClick={() => handleUndoPayment(row.id)}
+              disabled={isPaying[row.id]}
+              className="text-yellow-600 hover:text-yellow-800 transition-colors duration-200 flex items-center disabled:opacity-50"
+              title="Undo Payment"
+            >
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+              </svg>
             </button>
           )}
           <button
@@ -206,6 +381,8 @@ function PurchaseList() {
       )
     }
   ];
+
+  const columns = activeTab === 'immediate' ? immediateColumns : creditColumns;
 
   const customStyles = {
     headRow: {
@@ -264,7 +441,7 @@ function PurchaseList() {
           color: '#3b82f6', // Blue highlight on focus
         },
       },
-      // Additional styles for pagination elements
+      // Additional styles for other pagination elements
       selectStyle: {
         color: '#ffffff', // White text for select dropdown
         backgroundColor: '#1f2937', // Darker background for select
@@ -282,15 +459,7 @@ function PurchaseList() {
     },
   };
 
-  const filteredPurchases = purchases.filter(purchase => {
-    const matchesSearch = purchase.user_name ? purchase.user_name.toLowerCase().includes(searchTerm.toLowerCase()) : false;
-    const matchesMonth = !selectedMonth || new Date(purchase.buy_date).getMonth() === parseInt(selectedMonth);
-    const matchesType = filterType === 'all' || 
-      (filterType === 'immediate' && purchase.immediate) || 
-      (filterType === 'deposit' && !purchase.immediate);
-    return matchesSearch && matchesMonth && matchesType;
-  });
-
+  // Handle marking a purchase as paid
   const handleMarkAsPaid = async (id) => {
     if (window.confirm('Are you sure you want to mark this purchase as fully paid?')) {
       try {
@@ -303,14 +472,17 @@ function PurchaseList() {
         // Format dates properly
         const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
         
+        // Get today's date for paid_date
+        const today = new Date().toISOString().split('T')[0];
+        
         // Prepare properly formatted data for the server
         const purchaseData = {
           user_id: purchase.user_id,
           buy_date: formatDate(purchase.buy_date),
-          immediate: true, // Set to immediate payment
-          deposit_percentage: 0, // Set deposit to 0
+          immediate: false, // Keep as credit purchase
+          interest_percentage: purchase.interest_percentage, // Keep original interest percentage
           total_amount: parseFloat(purchase.total_amount),
-          due_date: null // No due date needed for immediate payment
+          paid_date: today // Set paid_date to today
         };
         
         // Update the purchase
@@ -329,6 +501,51 @@ function PurchaseList() {
         }, 5000);
       } catch (err) {
         setError('Failed to mark purchase as paid. Please try again later.');
+        setIsPaying(prev => ({ ...prev, [id]: false }));
+        console.error('Error updating purchase:', err);
+      }
+    }
+  };
+
+  // Handle undoing a payment
+  const handleUndoPayment = async (id) => {
+    if (window.confirm('Are you sure you want to undo this payment?')) {
+      try {
+        setIsPaying(prev => ({ ...prev, [id]: true }));
+        
+        // Get the current purchase data
+        const response = await axios.get(`http://localhost:5000/api/purchases/${id}`);
+        const purchase = response.data;
+        
+        // Format dates properly
+        const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
+        
+        // Prepare properly formatted data for the server
+        const purchaseData = {
+          user_id: purchase.user_id,
+          buy_date: formatDate(purchase.buy_date),
+          immediate: false, // Keep as credit purchase
+          interest_percentage: purchase.interest_percentage, // Keep original interest percentage
+          total_amount: parseFloat(purchase.total_amount),
+          paid_date: null // Remove paid_date
+        };
+        
+        // Update the purchase
+        await axios.put(`http://localhost:5000/api/purchases/${id}`, purchaseData);
+        
+        // Fetch all purchases again to ensure we have the latest data from the server
+        const updatedPurchasesResponse = await axios.get('http://localhost:5000/api/purchases');
+        setPurchases(updatedPurchasesResponse.data);
+        
+        setIsPaying(prev => ({ ...prev, [id]: false }));
+        setSuccessMessage('Payment has been successfully undone!');
+        
+        // Clear success message after 5 seconds
+        setTimeout(() => {
+          setSuccessMessage('');
+        }, 5000);
+      } catch (err) {
+        setError('Failed to undo payment. Please try again later.');
         setIsPaying(prev => ({ ...prev, [id]: false }));
         console.error('Error updating purchase:', err);
       }
@@ -400,18 +617,6 @@ function PurchaseList() {
             <option value="11">December</option>
           </select>
         </div>
-    
-        <div className="w-full sm:w-[200px]">
-          <select
-            className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200"
-            value={filterType}
-            onChange={(e) => setFilterType(e.target.value)}
-          >
-            <option value="all">All Payment Types</option>
-            <option value="immediate">Immediate</option>
-            <option value="deposit">Deposit</option>
-          </select>
-        </div>
 
         <div className="w-full sm:w-auto">
           <button
@@ -425,9 +630,33 @@ function PurchaseList() {
         </div>
       </div>
       
-      {purchases.length === 0 ? (
+      {/* Tabs */}
+      <div className="flex border-b border-gray-700 mb-6">
+        <button
+          className={`px-4 py-2 font-medium text-sm focus:outline-none ${
+            activeTab === 'immediate'
+              ? 'border-b-2 border-blue-500 text-blue-400'
+              : 'text-gray-400 hover:text-gray-300'
+          }`}
+          onClick={() => setActiveTab('immediate')}
+        >
+          Immediate Purchases
+        </button>
+        <button
+          className={`px-4 py-2 font-medium text-sm focus:outline-none ${
+            activeTab === 'credit'
+              ? 'border-b-2 border-blue-500 text-blue-400'
+              : 'text-gray-400 hover:text-gray-300'
+          }`}
+          onClick={() => setActiveTab('credit')}
+        >
+          Credit Purchases
+        </button>
+      </div>
+
+      {filteredPurchases.length === 0 ? (
         <div className="py-8 text-center bg-gray-800 rounded-lg border border-gray-700">
-          <p className="text-gray-300">No purchases found. Add a new purchase to get started.</p>
+          <p className="text-gray-300">No {activeTab} purchases found. Add a new purchase to get started.</p>
         </div>
       ) : (
         <div className="overflow-x-auto">

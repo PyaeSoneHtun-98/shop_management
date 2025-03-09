@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { format } from 'date-fns';
-import { FaEdit, FaTrash, FaArrowLeft, FaUser, FaCalendarAlt, FaDollarSign, FaPercentage, FaClock, FaInfoCircle, FaCheckCircle, FaPhone, FaMapMarkerAlt, FaEnvelope } from 'react-icons/fa';
+import { FaEdit, FaTrash, FaArrowLeft, FaUser, FaCalendarAlt, FaDollarSign, FaPercentage, FaClock, FaInfoCircle, FaCheckCircle, FaPhone, FaMapMarkerAlt, FaEnvelope, FaShoppingCart, FaMoneyBillWave, FaTruck } from 'react-icons/fa';
 
 function PurchaseDetails() {
   const { id } = useParams();
@@ -100,6 +100,9 @@ function PurchaseDetails() {
       </div>
     );
   };
+
+  // Determine if this is a deposit payment
+  const isDepositPayment = purchase.payment_type === 'deposit';
 
   return (
     <div className="bg-gray-900 p-6 rounded-lg shadow-sm">
