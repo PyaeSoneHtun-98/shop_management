@@ -56,47 +56,62 @@ function PurchaseList() {
     }
   };
 
-  // Calculate months between two dates
   const calculateMonthsBetween = (startDate, endDate) => {
     const start = new Date(startDate);
-    const end = new Date(endDate);
-    const yearDiff = end.getFullYear() - start.getFullYear();
-    const monthDiff = end.getMonth() - start.getMonth();
-    const dayDiff = end.getDate() - start.getDate();
+    const end = endDate ? new Date(endDate) : new Date();
     
-    // Calculate total months with decimal for partial months
-    let months = yearDiff * 12 + monthDiff;
+    // Implement DAYS360 algorithm (30/360 day count convention)
+    const days360 = (startDate, endDate) => {
+      let startDay = startDate.getDate();
+      let startMonth = startDate.getMonth();
+      let startYear = startDate.getFullYear();
+      
+      let endDay = endDate.getDate();
+      let endMonth = endDate.getMonth();
+      let endYear = endDate.getFullYear();
+      
+      // Adjust start day
+      if (startDay === 31) {
+        startDay = 30;
+      }
+      
+      // Adjust end day
+      if (endDay === 31) {
+        endDay = 30;
+      }
+      
+      // Calculate using 30/360 formula
+      return (endYear - startYear) * 360 + (endMonth - startMonth) * 30 + (endDay - startDay);
+    };
     
-    // Add partial month based on days
-    if (dayDiff > 0) {
-      const daysInMonth = new Date(end.getFullYear(), end.getMonth() + 1, 0).getDate();
-      months += dayDiff / daysInMonth;
-    } else if (dayDiff < 0) {
-      const daysInPrevMonth = new Date(end.getFullYear(), end.getMonth(), 0).getDate();
-      months -= Math.abs(dayDiff) / daysInPrevMonth;
-    }
+    const totalDays = days360(start, end);
+    const months = totalDays / 30;
     
-    // Ensure we don't return negative months
-    return Math.max(0, months);
+    console.log('Date Calculation:', {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      totalDays,
+      months
+    });
+    
+    return months;
   };
 
+  // Calculate interest amount based on monthly interest rate and elapsed time
   // Calculate interest amount based on monthly interest rate and elapsed time
   const calculateInterestAmount = (principal, interestPercentage, buyDate, paidDate) => {
     // If the purchase is paid, calculate interest only up to the paid date
     // Otherwise, calculate interest up to today
     const endDate = paidDate ? new Date(paidDate) : new Date();
     
-    // Monthly interest rate (3%)
-    const monthlyInterestRate = 3;
-    
     // Calculate months between purchase date and end date
     const months = calculateMonthsBetween(buyDate, endDate);
     
-    // Calculate total interest percentage based on elapsed months
-    const totalInterestPercentage = monthlyInterestRate * months;
+    // Calculate monthly interest amount (fixed)
+    const monthlyInterestAmount = (principal * interestPercentage) / 100;
     
-    // Calculate interest amount
-    return (principal * totalInterestPercentage) / 100;
+    // Total interest = monthly interest × number of months
+    return monthlyInterestAmount * months;
   };
 
   // Calculate total amount with interest
@@ -183,17 +198,17 @@ function PurchaseList() {
         </div>
       )
     },
-    {
-      name: 'Paid Date',
-      selector: row => row.paid_date,
-      sortable: true,
-      cell: row => (
-        <div className="flex items-center">
-          <FaCalendarAlt className="text-gray-400 mr-2" />
-          <span>{row.paid_date ? format(new Date(row.paid_date), 'MMM dd, yyyy') : '-'}</span>
-        </div>
-      )
-    },
+    // {
+    //   name: 'Paid Date',
+    //   selector: row => row.paid_date,
+    //   sortable: true,
+    //   cell: row => (
+    //     <div className="flex items-center">
+    //       <FaCalendarAlt className="text-gray-400 mr-2" />
+    //       <span>{row.paid_date ? format(new Date(row.paid_date), 'MMM dd, yyyy') : '-'}</span>
+    //     </div>
+    //   )
+    // },
     {
       name: 'Amount',
       selector: row => row.total_amount,
@@ -270,20 +285,21 @@ function PurchaseList() {
       )
     },
     {
-      name: 'Months',
-      selector: row => calculateMonthsBetween(row.buy_date, row.paid_date || new Date()),
-      sortable: true,
-      cell: row => (
-        <div className="flex items-center">
-          <FaClock className="text-gray-400 mr-2" />
-          <span>{calculateMonthsBetween(row.buy_date, row.paid_date || new Date()).toFixed(1)}</span>
-        </div>
-      )
-    },
+        name: 'Months',
+        selector: row => calculateMonthsBetween(row.buy_date, row.paid_date || new Date()),
+        sortable: true,
+        cell: row => (
+          <div className="flex items-center">
+            <FaClock className="text-gray-400 mr-2" />
+            <span>{calculateMonthsBetween(row.buy_date, row.paid_date || new Date()).toFixed(6)}</span>
+          </div>
+        )
+      },
     {
-      name: 'Monthly Rate',
+      name: 'Percent',
       selector: row => 3, // Fixed 3% monthly rate
       sortable: false,
+      width: "100px",
       cell: row => (
         <div className="flex items-center">
           <FaPercentage className="text-gray-400 mr-2" />
