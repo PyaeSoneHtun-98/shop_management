@@ -15,7 +15,7 @@ function AddPurchase() {
     user_id: '',
     buy_date: new Date().toISOString().split('T')[0], // Set default to today
     immediate: paymentType === 'immediate',
-    interest_percentage: 10, // Default interest percentage
+    interest_percentage: 3, // Default interest percentage
     total_amount: ''
   });
 
@@ -49,7 +49,7 @@ function AddPurchase() {
     setFormData(prev => ({
       ...prev,
       immediate: type === 'immediate',
-      interest_percentage: type === 'immediate' ? 0 : 10 // Reset to default 10% for credit
+      interest_percentage: type === 'immediate' ? 0 : 3 // Reset to default 10% for credit
     }));
   };
 

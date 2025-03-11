@@ -74,7 +74,7 @@ function Pagination({
   return (
     <div className="flex flex-col md:flex-row justify-between items-center py-3 px-4 bg-gray-800 border-t border-gray-700">
       {/* Rows per page selector */}
-      <div className="flex items-center mb-3 md:mb-0 text-gray-300 text-sm">
+      <div className="hidden md:flex items-center mb-3 md:mb-0 text-gray-300 text-sm">
         <span className="mr-2">Rows per page:</span>
         <select
           className="bg-gray-700 border border-gray-600 text-white rounded px-2 py-1 focus:outline-none focus:ring-2 focus:ring-blue-500"
@@ -90,7 +90,7 @@ function Pagination({
       </div>
       
       {/* Pagination buttons - moved to middle */}
-      <div className="flex items-center space-x-1 mb-3 md:mb-0 order-last md:order-none">
+      <div className="flex items-center space-x-1 order-last md:order-none">
         {/* First page button */}
         <button
           className={`p-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 ${currentPage === 1 ? 'text-gray-500 cursor-not-allowed' : 'text-white hover:bg-gray-700'}`}
@@ -145,7 +145,7 @@ function Pagination({
       </div>
       
       {/* Page information - moved to right */}
-      <div className="text-gray-300 text-sm mb-3 md:mb-0">
+      <div className="text-gray-300 text-sm mb-3 md:mb-0 hidden md:block">
         {totalRows === 0 ? (
           'No records to display'
         ) : (

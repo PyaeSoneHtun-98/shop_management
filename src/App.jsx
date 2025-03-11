@@ -17,7 +17,7 @@ function App() {
   return (
     <Router>
       <div className="min-h-screen bg-gray-900">
-        <header className="bg-gray-800 shadow-md py-4 px-4 sm:px-6 border-b border-gray-700">
+        <header className="bg-gray-800 shadow-md py-4 px-2 sm:px-6 border-b border-gray-700">
           <div className="container mx-auto flex flex-col md:flex-row md:justify-between md:items-center">
             <div className="flex items-center justify-center md:justify-start mb-4 md:mb-0">
               <FaShoppingCart className="text-blue-400 text-2xl mr-3" />
@@ -40,7 +40,7 @@ function App() {
           </div>
         </header>
         
-        <main className="container mx-auto px-4 sm:px-6 py-6 sm:py-8">
+        <main className="container mx-auto px-2 sm:px-6 py-6 sm:py-8">
           <Routes>
             <Route path="/" element={<PurchaseList />} />
             <Route path="/add" element={<AddPurchase />} />

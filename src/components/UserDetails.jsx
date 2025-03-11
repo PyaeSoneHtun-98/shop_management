@@ -526,7 +526,7 @@ function UserDetails() {
   };
 
   if (loading) return (
-    <div className="bg-gray-900 p-4 sm:p-6 rounded-lg shadow-sm">
+    <div className="bg-gray-900 p-2 sm:p-6 rounded-lg shadow-sm">
       <div className="flex justify-center items-center h-64">
         <div className="animate-spin rounded-full h-12 w-12 border-t-2 border-b-2 border-blue-500"></div>
         <span className="ml-3 text-gray-200">Loading user details...</span>
@@ -550,7 +550,7 @@ function UserDetails() {
   );
 
   if (!user) return (
-    <div className="bg-gray-900 p-4 sm:p-6 rounded-lg shadow-sm">
+    <div className="bg-gray-900 p-2 sm:p-6 rounded-lg shadow-sm">
       <div className="bg-gray-800 p-6 rounded-lg border border-gray-700 text-center">
         <h2 className="text-xl font-semibold text-gray-200 mb-4">User Not Found</h2>
         <p className="text-gray-400 mb-6">The user you're looking for doesn't exist or has been removed.</p>
@@ -566,7 +566,7 @@ function UserDetails() {
   );
 
   return (
-    <div className="bg-gray-900 p-4 sm:p-6 rounded-lg shadow-sm">
+    <div className="bg-gray-900 p-2 sm:p-6 rounded-lg shadow-sm">
       <SuccessAlert />
       
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
@@ -653,7 +653,7 @@ function UserDetails() {
         </div>
       </div>
 
-      <div className="bg-gray-800 p-6 rounded shadow border border-gray-700">
+      <div className="bg-gray-800 p-2 rounded shadow border border-gray-700">
         <h3 className="text-lg font-medium mb-4 flex items-center text-gray-200">
           <FaShoppingBag className="mr-2 text-blue-400" />
           Purchase History

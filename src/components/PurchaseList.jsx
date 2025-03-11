@@ -17,6 +17,7 @@ function PurchaseList() {
   const [isPaying, setIsPaying] = useState({});
   const [successMessage, setSuccessMessage] = useState('');
   const [activeTab, setActiveTab] = useState('immediate'); // 'immediate' or 'credit'
+  const [showSummary, setShowSummary] = useState(false); // State for collapsible summary
   
   // Pagination state
   const [currentPage, setCurrentPage] = useState(1);
@@ -631,7 +632,7 @@ function PurchaseList() {
   };
 
   return (
-    <div className="bg-gray-900 p-4 sm:p-6 rounded-lg shadow-sm">
+    <div className="bg-gray-900 p-2 sm:p-6 rounded-lg shadow-sm">
       <SuccessAlert />
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
         <div className="flex items-center space-x-4">
@@ -751,6 +752,77 @@ function PurchaseList() {
             noHeader
             pagination={false}
           />
+          
+          {/* Collapsible Totals Summary Section */}
+          {filteredPurchases.length > 0 && (
+            <div className="mt-4">
+              <button 
+                onClick={() => setShowSummary(!showSummary)} 
+                className="w-full flex items-center justify-between p-3 bg-gray-800 rounded-t-lg border border-gray-700 hover:bg-gray-750 transition-colors duration-200 focus:outline-none"
+              >
+                <span className="font-medium text-gray-300 flex items-center">
+                  <FaDollarSign className="mr-2 text-blue-400" />
+                  Financial Summary
+                </span>
+                <span className="text-gray-400">
+                  {showSummary ? (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M14.707 12.707a1 1 0 01-1.414 0L10 9.414l-3.293 3.293a1 1 0 01-1.414-1.414l4-4a1 1 0 011.414 0l4 4a1 1 0 010 1.414z" clipRule="evenodd" />
+                    </svg>
+                  ) : (
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
+                      <path fillRule="evenodd" d="M5.293 7.293a1 1 0 011.414 0L10 10.586l3.293-3.293a1 1 0 111.414 1.414l-4 4a1 1 0 01-1.414 0l-4-4a1 1 0 010-1.414z" clipRule="evenodd" />
+                    </svg>
+                  )}
+                </span>
+              </button>
+              
+              {showSummary && (
+                <div className="p-4 bg-gray-800 rounded-b-lg border-t-0 border border-gray-700 animate-fadeIn">
+                  {activeTab === 'credit' && (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                      <div className="p-3 bg-gray-700 rounded-lg">
+                        <p className="text-gray-400 text-sm">Total Principal</p>
+                        <p className="text-xl font-bold text-white flex items-center">
+                          <FaDollarSign className="text-gray-400 mr-1" />
+                          {filteredPurchases.reduce((sum, purchase) => sum + Number(purchase.total_amount), 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="p-3 bg-gray-700 rounded-lg">
+                        <p className="text-gray-400 text-sm">Total with Interest</p>
+                        <p className="text-xl font-bold text-white flex items-center">
+                          <FaDollarSign className="text-gray-400 mr-1" />
+                          {filteredPurchases.reduce((sum, purchase) => sum + calculateTotalWithInterest(Number(purchase.total_amount), purchase.interest_percentage, purchase.buy_date, purchase.paid_date), 0).toFixed(2)}
+                        </p>
+                      </div>
+                      <div className="p-3 bg-gray-700 rounded-lg">
+                        <p className="text-gray-400 text-sm">Total Profit</p>
+                        <p className="text-xl font-bold text-white flex items-center">
+                          <FaDollarSign className="text-gray-400 mr-1" />
+                          {filteredPurchases.reduce((sum, purchase) => {
+                            const interestAmount = calculateInterestAmount(Number(purchase.total_amount), purchase.interest_percentage, purchase.buy_date, purchase.paid_date);
+                            return sum + interestAmount;
+                          }, 0).toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                  
+                  {activeTab === 'immediate' && (
+                    <div className="grid grid-cols-1 gap-4">
+                      <div className="p-3 bg-gray-700 rounded-lg">
+                        <p className="text-gray-400 text-sm">Total Amount</p>
+                        <p className="text-xl font-bold text-white flex items-center">
+                          <FaDollarSign className="text-gray-400 mr-1" />
+                          {filteredPurchases.reduce((sum, purchase) => sum + Number(purchase.total_amount), 0).toFixed(2)}
+                        </p>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           
           {/* Custom pagination component */}
           <Pagination
