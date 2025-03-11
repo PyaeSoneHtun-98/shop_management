@@ -167,13 +167,30 @@ app.get('/api/purchases/user/:id', async (req, res) => {
       return res.status(404).json({ error: 'User not found' });
     }
     
+    // Use DATE_FORMAT to ensure dates are formatted consistently without timezone issues
     const [rows] = await pool.query(`
-      SELECT p.*, u.name as user_name, u.email as user_email 
+      SELECT 
+        p.id, 
+        p.user_id, 
+        DATE_FORMAT(p.buy_date, '%Y-%m-%d') AS buy_date, 
+        p.immediate, 
+        p.interest_percentage, 
+        p.total_amount, 
+        DATE_FORMAT(p.paid_date, '%Y-%m-%d') AS paid_date, 
+        p.created_at, 
+        p.updated_at,
+        u.name as user_name, 
+        u.email as user_email 
       FROM purchases p
       LEFT JOIN users u ON p.user_id = u.id
       WHERE p.user_id = ?
       ORDER BY p.created_at DESC
     `, [userId]);
+    
+    // Log a sample date if available
+    if (rows.length > 0) {
+      console.log('Sample user purchase from database:', rows[0].id, 'buy_date:', rows[0].buy_date);
+    }
     
     res.json(rows);
   } catch (error) {
@@ -185,12 +202,32 @@ app.get('/api/purchases/user/:id', async (req, res) => {
 // Get all purchases
 app.get('/api/purchases', async (req, res) => {
   try {
+    console.log('Fetching all purchases');
+    
+    // Use the SQL_NO_CACHE option to ensure we get the freshest data
+    // and DATE_FORMAT to convert dates to strings in a consistent format
     const [rows] = await pool.query(`
-      SELECT p.*, u.name as user_name 
+      SELECT 
+        p.id, 
+        p.user_id, 
+        DATE_FORMAT(p.buy_date, '%Y-%m-%d') AS buy_date, 
+        p.immediate, 
+        p.interest_percentage, 
+        p.total_amount, 
+        DATE_FORMAT(p.paid_date, '%Y-%m-%d') AS paid_date, 
+        p.created_at, 
+        p.updated_at, 
+        u.name as user_name 
       FROM purchases p
       LEFT JOIN users u ON p.user_id = u.id
       ORDER BY p.buy_date DESC
     `);
+    
+    // Log a sample date if available
+    if (rows.length > 0) {
+      console.log('Sample purchase from database:', rows[0].id, 'buy_date:', rows[0].buy_date);
+    }
+    
     res.json(rows);
   } catch (error) {
     console.error('Error fetching purchases:', error);
@@ -289,8 +326,22 @@ app.post('/api/purchases', async (req, res) => {
 // Get purchase by ID
 app.get('/api/purchases/:id', async (req, res) => {
   try {
+    // Use DATE_FORMAT to ensure dates are formatted consistently without timezone issues
     const [rows] = await pool.query(`
-      SELECT p.*, u.name as user_name, u.email as user_email, u.phone as user_phone, u.address as user_address 
+      SELECT 
+        p.id, 
+        p.user_id, 
+        DATE_FORMAT(p.buy_date, '%Y-%m-%d') AS buy_date, 
+        p.immediate, 
+        p.interest_percentage,
+        p.total_amount, 
+        DATE_FORMAT(p.paid_date, '%Y-%m-%d') AS paid_date, 
+        p.created_at, 
+        p.updated_at,
+        u.name as user_name, 
+        u.email as user_email, 
+        u.phone as user_phone, 
+        u.address as user_address
       FROM purchases p
       LEFT JOIN users u ON p.user_id = u.id
       WHERE p.id = ?
@@ -299,6 +350,8 @@ app.get('/api/purchases/:id', async (req, res) => {
     if (rows.length === 0) {
       return res.status(404).json({ message: 'Purchase not found' });
     }
+    
+    console.log('Fetched purchase by ID:', rows[0].id, 'buy_date:', rows[0].buy_date);
     
     res.json(rows[0]);
   } catch (error) {
@@ -310,6 +363,9 @@ app.get('/api/purchases/:id', async (req, res) => {
 // Update purchase
 app.put('/api/purchases/:id', async (req, res) => {
   try {
+    console.log('Received update purchase request for ID:', req.params.id);
+    console.log('Update data:', req.body);
+    
     const { user_id, buy_date, immediate, interest_percentage, total_amount, paid_date } = req.body;
     const id = req.params.id;
     
@@ -333,21 +389,19 @@ app.put('/api/purchases/:id', async (req, res) => {
       return res.status(400).json({ message: 'Invalid user ID' });
     }
 
-    // Format dates
-    const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
-    const formattedBuyDate = formatDate(buy_date);
-    const formattedPaidDate = formatDate(paid_date);
+    // Log the exact received dates
+    console.log('Buy date exactly as received:', buy_date);
+    console.log('Paid date exactly as received:', paid_date);
     
-    // If immediate is true and paid_date is not provided, set paid_date to today
-    const finalPaidDate = immediate ? (formattedPaidDate || new Date().toISOString().split('T')[0]) : formattedPaidDate;
-    
+    // Use the dates exactly as received - no formatting or conversion
+    // This is the key change to prevent the date shift issue
     const purchaseData = [
       parseInt(user_id),
-      formattedBuyDate,
+      buy_date, // Use exactly as received
       Boolean(immediate),
       parseFloat(interest_percentage),
       parseFloat(total_amount),
-      finalPaidDate,
+      paid_date, // Use exactly as received
       id
     ];
     
@@ -360,7 +414,24 @@ app.put('/api/purchases/:id', async (req, res) => {
       return res.status(404).json({ message: 'Purchase not found' });
     }
     
-    res.json({ message: 'Purchase updated successfully' });
+    // Fetch the updated purchase to verify the dates
+    const [updatedPurchase] = await pool.query(`
+      SELECT 
+        id, 
+        DATE_FORMAT(buy_date, '%Y-%m-%d') AS buy_date,
+        DATE_FORMAT(paid_date, '%Y-%m-%d') AS paid_date
+      FROM purchases 
+      WHERE id = ?
+    `, [id]);
+    
+    if (updatedPurchase.length > 0) {
+      console.log('Updated purchase in database:', updatedPurchase[0]);
+    }
+    
+    res.json({ 
+      message: 'Purchase updated successfully',
+      updated_purchase: updatedPurchase.length > 0 ? updatedPurchase[0] : null
+    });
   } catch (error) {
     console.error('Error updating purchase:', error);
     // Check for foreign key constraint violation

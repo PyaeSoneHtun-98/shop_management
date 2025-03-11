@@ -22,27 +22,40 @@ function PurchaseList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
-  useEffect(() => {
-    const fetchPurchases = async () => {
-      try {
-        const response = await axios.get('http://localhost:5000/api/purchases');
-        setPurchases(response.data);
-        setLoading(false);
-      } catch (err) {
-        setError('Failed to fetch purchases. Please try again later.');
-        setLoading(false);
-        console.error('Error fetching purchases:', err);
+  // Define the fetchPurchases function outside useEffect so it can be reused
+  const fetchPurchases = async () => {
+    try {
+      setLoading(true);
+      // Use fetch API to get raw response
+      const response = await fetch('http://localhost:5000/api/purchases');
+      const rawData = await response.text(); // Get raw response text
+      
+      // Parse the JSON manually
+      const purchases = JSON.parse(rawData);
+      
+      // Log some sample dates from the purchases
+      if (purchases.length > 0) {
+        console.log('Sample purchase date from fetch:', purchases[0].id, purchases[0].buy_date);
       }
-    };
+      
+      setPurchases(purchases);
+      setLoading(false);
+    } catch (err) {
+      setError('Failed to fetch purchases. Please try again later.');
+      setLoading(false);
+      console.error('Error fetching purchases:', err);
+    }
+  };
 
+  useEffect(() => {
+    // Fetch data once when component mounts
     fetchPurchases();
-    
-    // Set up an interval to refresh the purchase list every 5 seconds
-    const intervalId = setInterval(fetchPurchases, 5000);
-    
-    // Clean up the interval when the component unmounts
-    return () => clearInterval(intervalId);
   }, []);
+
+  // Handle refresh button click
+  const handleRefresh = () => {
+    fetchPurchases();
+  };
 
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this purchase?')) {
@@ -87,13 +100,6 @@ function PurchaseList() {
     const totalDays = days360(start, end);
     const months = totalDays / 30;
     
-    console.log('Date Calculation:', {
-      startDate: start.toISOString(),
-      endDate: end.toISOString(),
-      totalDays,
-      months
-    });
-    
     return months;
   };
 
@@ -133,15 +139,15 @@ function PurchaseList() {
       } else {
         const principal = Number(purchase.total_amount);
         const months = calculateMonthsBetween(purchase.buy_date, purchase.paid_date || new Date());
-        const interestAmount = calculateInterestAmount(principal, 3, purchase.buy_date, purchase.paid_date);
-        const totalWithInterest = calculateTotalWithInterest(principal, 3, purchase.buy_date, purchase.paid_date);
+        const interestAmount = calculateInterestAmount(principal, purchase.interest_percentage, purchase.buy_date, purchase.paid_date);
+        const totalWithInterest = calculateTotalWithInterest(principal, purchase.interest_percentage, purchase.buy_date, purchase.paid_date);
         
         return {
           'Customer': purchase.user_name,
           'Buy Date': purchase.buy_date ? format(new Date(purchase.buy_date), 'MMM dd, yyyy') : '-',
           'Principal Amount': `$${principal.toFixed(2)}`,
           'Months': months.toFixed(1),
-          'Monthly Rate': '3%',
+          'Interest Rate': `${purchase.interest_percentage}%`,
           'Interest Amount': `$${interestAmount.toFixed(2)}`,
           'Total with Interest': `$${totalWithInterest.toFixed(2)}`,
           'Status': purchase.paid_date ? `Paid on ${format(new Date(purchase.paid_date), 'MMM dd, yyyy')}` : 'Unpaid'
@@ -163,15 +169,30 @@ function PurchaseList() {
   if (loading) return <div className="text-center py-4">Loading...</div>;
   if (error) return <div className="text-red-500 py-4">{error}</div>;
 
-  // Filter purchases based on active tab
+  // Filter purchases based on active tab, search term, and selected month
   const filteredPurchases = purchases.filter(purchase => {
-    if (activeTab === 'immediate') {
-      // Only show purchases that were immediate from the beginning
-      return purchase.immediate === 1 || purchase.immediate === true;
-    } else {
-      // Show all credit purchases, whether paid or not
-      return purchase.interest_percentage > 0;
+    // First, filter by tab (immediate vs credit)
+    const matchesTab = activeTab === 'immediate' 
+      ? (purchase.immediate === 1 || purchase.immediate === true)
+      : (purchase.interest_percentage > 0);
+
+    // If it doesn't match the active tab, exclude it immediately
+    if (!matchesTab) return false;
+    
+    // Then filter by search term (case insensitive search in user_name)
+    const matchesSearch = !searchTerm || 
+      (purchase.user_name && purchase.user_name.toLowerCase().includes(searchTerm.toLowerCase()));
+    
+    // Then filter by month
+    let matchesMonth = true;
+    if (selectedMonth !== '') {
+      const purchaseDate = new Date(purchase.buy_date);
+      const purchaseMonth = purchaseDate.getMonth().toString();
+      matchesMonth = purchaseMonth === selectedMonth;
     }
+    
+    // Include only if it matches all filters
+    return matchesTab && matchesSearch && matchesMonth;
   });
 
   // Define columns based on active tab
@@ -194,7 +215,7 @@ function PurchaseList() {
       cell: row => (
         <div className="flex items-center">
           <FaCalendarAlt className="text-gray-400 mr-2" />
-          <span>{format(new Date(row.buy_date), 'MMM dd, yyyy')}</span>
+          <span>{row.buy_date}</span>
         </div>
       )
     },
@@ -269,7 +290,7 @@ function PurchaseList() {
       cell: row => (
         <div className="flex items-center">
           <FaCalendarAlt className="text-gray-400 mr-2" />
-          <span>{format(new Date(row.buy_date), 'MMM dd, yyyy')}</span>
+          <span>{row.buy_date}</span>
         </div>
       )
     },
@@ -285,47 +306,47 @@ function PurchaseList() {
       )
     },
     {
-        name: 'Months',
-        selector: row => calculateMonthsBetween(row.buy_date, row.paid_date || new Date()),
-        sortable: true,
-        cell: row => (
-          <div className="flex items-center">
-            <FaClock className="text-gray-400 mr-2" />
-            <span>{calculateMonthsBetween(row.buy_date, row.paid_date || new Date()).toFixed(6)}</span>
-          </div>
-        )
-      },
+      name: 'Months',
+      selector: row => calculateMonthsBetween(row.buy_date, row.paid_date || new Date()),
+      sortable: true,
+      cell: row => (
+        <div className="flex items-center">
+          <FaClock className="text-gray-400 mr-2" />
+          <span>{calculateMonthsBetween(row.buy_date, row.paid_date || new Date()).toFixed(6)}</span>
+        </div>
+      )
+    },
     {
       name: 'Percent',
-      selector: row => 3, // Fixed 3% monthly rate
-      sortable: false,
+      selector: row => row.interest_percentage,
+      sortable: true,
       width: "100px",
       cell: row => (
         <div className="flex items-center">
           <FaPercentage className="text-gray-400 mr-2" />
-          <span>3%</span>
+          <span>{row.interest_percentage}%</span>
         </div>
       )
     },
     {
       name: 'Interest Amount',
-      selector: row => calculateInterestAmount(Number(row.total_amount), 3, row.buy_date, row.paid_date),
+      selector: row => calculateInterestAmount(Number(row.total_amount), row.interest_percentage, row.buy_date, row.paid_date),
       sortable: true,
       cell: row => (
         <div className="flex items-center">
           <FaDollarSign className="text-gray-400 mr-2" />
-          <span>${calculateInterestAmount(Number(row.total_amount), 3, row.buy_date, row.paid_date).toFixed(2)}</span>
+          <span>${calculateInterestAmount(Number(row.total_amount), row.interest_percentage, row.buy_date, row.paid_date).toFixed(2)}</span>
         </div>
       )
     },
     {
       name: 'Total with Interest',
-      selector: row => calculateTotalWithInterest(Number(row.total_amount), 3, row.buy_date, row.paid_date),
+      selector: row => calculateTotalWithInterest(Number(row.total_amount), row.interest_percentage, row.buy_date, row.paid_date),
       sortable: true,
       cell: row => (
         <div className="flex items-center">
           <FaDollarSign className="text-gray-400 mr-2" />
-          <span className="font-medium">${calculateTotalWithInterest(Number(row.total_amount), 3, row.buy_date, row.paid_date).toFixed(2)}</span>
+          <span className="font-medium">${calculateTotalWithInterest(Number(row.total_amount), row.interest_percentage, row.buy_date, row.paid_date).toFixed(2)}</span>
         </div>
       )
     },
@@ -337,7 +358,7 @@ function PurchaseList() {
         <div className="flex items-center">
           {row.paid_date ? (
             <span className="px-2 py-1 bg-green-900 text-green-300 rounded-full text-xs font-semibold">
-              Paid on {format(new Date(row.paid_date), 'MMM dd, yyyy')}
+              Paid on {row.paid_date}
             </span>
           ) : (
             <span className="px-2 py-1 bg-yellow-900 text-yellow-300 rounded-full text-xs font-semibold">
@@ -481,32 +502,47 @@ function PurchaseList() {
       try {
         setIsPaying(prev => ({ ...prev, [id]: true }));
         
-        // Get the current purchase data
-        const response = await axios.get(`http://localhost:5000/api/purchases/${id}`);
-        const purchase = response.data;
+        // Get the current purchase data - Use a direct fetch to get raw response
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}`);
+        const rawData = await response.text(); // Get raw response text
+        console.log('Raw response data:', rawData); // Log the raw text
         
-        // Format dates properly
-        const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
+        // Parse the JSON manually
+        const purchase = JSON.parse(rawData);
+        
+        console.log('Parsed purchase data from server:', purchase);
+        console.log('Original buy_date string:', purchase.buy_date);
         
         // Get today's date for paid_date
         const today = new Date().toISOString().split('T')[0];
         
-        // Prepare properly formatted data for the server
+        // Create a new object using the exact buy_date string from the purchase
         const purchaseData = {
           user_id: purchase.user_id,
-          buy_date: formatDate(purchase.buy_date),
-          immediate: false, // Keep as credit purchase
-          interest_percentage: purchase.interest_percentage, // Keep original interest percentage
+          buy_date: purchase.buy_date, // Use the raw string
+          immediate: false,
+          interest_percentage: purchase.interest_percentage,
           total_amount: parseFloat(purchase.total_amount),
-          paid_date: today // Set paid_date to today
+          paid_date: today
         };
         
-        // Update the purchase
-        await axios.put(`http://localhost:5000/api/purchases/${id}`, purchaseData);
+        console.log('Sending exact data to server:', purchaseData);
         
-        // Fetch all purchases again to ensure we have the latest data from the server
-        const updatedPurchasesResponse = await axios.get('http://localhost:5000/api/purchases');
-        setPurchases(updatedPurchasesResponse.data);
+        // Use fetch for the update too to avoid automatic conversions
+        const updateResponse = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(purchaseData)
+        });
+        
+        if (!updateResponse.ok) {
+          throw new Error(`Server returned ${updateResponse.status}: ${await updateResponse.text()}`);
+        }
+        
+        // Fetch all purchases again to ensure we have the latest data
+        await fetchPurchases();
         
         setIsPaying(prev => ({ ...prev, [id]: false }));
         setSuccessMessage('Purchase has been successfully marked as paid!');
@@ -529,29 +565,44 @@ function PurchaseList() {
       try {
         setIsPaying(prev => ({ ...prev, [id]: true }));
         
-        // Get the current purchase data
-        const response = await axios.get(`http://localhost:5000/api/purchases/${id}`);
-        const purchase = response.data;
+        // Get the current purchase data - Use a direct fetch to get raw response
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}`);
+        const rawData = await response.text(); // Get raw response text
+        console.log('Raw response data for undo:', rawData); // Log the raw text
         
-        // Format dates properly
-        const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
+        // Parse the JSON manually
+        const purchase = JSON.parse(rawData);
         
-        // Prepare properly formatted data for the server
+        console.log('Parsed purchase data for undo:', purchase);
+        console.log('Original buy_date string for undo:', purchase.buy_date);
+        
+        // Create a new object using the exact buy_date string from the purchase
         const purchaseData = {
           user_id: purchase.user_id,
-          buy_date: formatDate(purchase.buy_date),
-          immediate: false, // Keep as credit purchase
-          interest_percentage: purchase.interest_percentage, // Keep original interest percentage
+          buy_date: purchase.buy_date, // Use the raw string
+          immediate: false,
+          interest_percentage: purchase.interest_percentage,
           total_amount: parseFloat(purchase.total_amount),
-          paid_date: null // Remove paid_date
+          paid_date: null
         };
         
-        // Update the purchase
-        await axios.put(`http://localhost:5000/api/purchases/${id}`, purchaseData);
+        console.log('Sending exact data to server for undo:', purchaseData);
         
-        // Fetch all purchases again to ensure we have the latest data from the server
-        const updatedPurchasesResponse = await axios.get('http://localhost:5000/api/purchases');
-        setPurchases(updatedPurchasesResponse.data);
+        // Use fetch for the update too to avoid automatic conversions
+        const updateResponse = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          method: 'PUT',
+          headers: {
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(purchaseData)
+        });
+        
+        if (!updateResponse.ok) {
+          throw new Error(`Server returned ${updateResponse.status}: ${await updateResponse.text()}`);
+        }
+        
+        // Fetch all purchases again to ensure we have the latest data
+        await fetchPurchases();
         
         setIsPaying(prev => ({ ...prev, [id]: false }));
         setSuccessMessage('Payment has been successfully undone!');
@@ -598,7 +649,7 @@ function PurchaseList() {
         </Link>
       </div>
     
-      <div className="flex flex-col sm:flex-row flex-wrap gap-4 mb-6">
+      <div className="flex flex-col sm:flex-row flex-wrap gap-4 mb-6 items-center">
         <div className="w-full sm:flex-1 min-w-[200px]">
           <div className="relative">
             <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
@@ -634,10 +685,22 @@ function PurchaseList() {
           </select>
         </div>
 
-        <div className="w-full sm:w-auto">
+        <div className="w-full sm:w-auto flex gap-2">
+          <button
+            onClick={handleRefresh}
+            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap"
+            title="Refresh Data"
+            disabled={loading}
+          >
+            <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 mr-2 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+            </svg>
+            {loading ? 'Loading...' : 'Refresh'}
+          </button>
+          
           <button
             onClick={handleExportToExcel}
-            className="w-full px-4 py-2 bg-green-700 text-white rounded hover:bg-green-800 transition-colors duration-200 flex items-center justify-center"
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap min-w-[140px]"
             title="Export to Excel"
           >
             <FaFileExcel className="mr-2" />

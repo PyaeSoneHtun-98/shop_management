@@ -23,18 +23,30 @@ function UserDetails() {
   useEffect(() => {
     const fetchUserAndPurchases = async () => {
       try {
-        // Fetch user details using our API utility
-        const userData = await fetchUser(id);
+        // Fetch user details
+        const userResponse = await fetch(`http://localhost:5000/api/users/${id}`);
+        const userRawData = await userResponse.text();
+        console.log('Raw user data:', userRawData);
+        const userData = JSON.parse(userRawData);
         setUser(userData);
 
-        // Fetch user's purchases using our API utility
-        const purchasesData = await fetchUserPurchases(id);
+        // Fetch user's purchases
+        const purchasesResponse = await fetch(`http://localhost:5000/api/purchases/user/${id}`);
+        const purchasesRawData = await purchasesResponse.text();
+        console.log('Raw purchases data:', purchasesRawData);
+        const purchasesData = JSON.parse(purchasesRawData);
+        
+        // Log sample purchase dates
+        if (purchasesData.length > 0) {
+          console.log('Sample user purchase date from initial fetch:', purchasesData[0].id, purchasesData[0].buy_date);
+        }
+        
         setPurchases(purchasesData);
         
         setLoading(false);
       } catch (err) {
         console.error('Error fetching user details:', err);
-        setError(err.displayMessage || 'Failed to fetch user details. Please try again later.');
+        setError(err.message || 'Failed to fetch user details. Please try again later.');
         setLoading(false);
       }
     };
@@ -377,27 +389,36 @@ function UserDetails() {
         const response = await axios.get(`http://localhost:5000/api/purchases/${purchaseId}`);
         const purchase = response.data;
         
-        // Format dates properly
-        const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
+        // Log the exact date format received from the server
+        console.log('Original purchase data from server:', purchase);
+        console.log('Original buy_date:', purchase.buy_date);
         
         // Get today's date for paid_date
         const today = new Date().toISOString().split('T')[0];
         
-        // Prepare properly formatted data for the server
+        // Create a new object with EXACTLY the same buy_date as received
         const purchaseData = {
           user_id: purchase.user_id,
-          buy_date: formatDate(purchase.buy_date),
-          immediate: false, // Keep as credit purchase
-          interest_percentage: purchase.interest_percentage, // Keep original interest percentage
+          buy_date: purchase.buy_date, // Keep exactly as received, no manipulation
+          immediate: false,
+          interest_percentage: purchase.interest_percentage,
           total_amount: parseFloat(purchase.total_amount),
-          paid_date: today // Set paid_date to today
+          paid_date: today
         };
+        
+        console.log('Sending to server:', purchaseData);
         
         // Update the purchase using our API utility
         await updatePurchase(purchaseId, purchaseData);
         
         // Fetch user's purchases again to ensure we have the latest data
         const purchasesData = await fetchUserPurchases(id);
+        
+        // Log the updated purchase to verify the date wasn't changed
+        const updatedPurchase = purchasesData.find(p => p.id === purchaseId);
+        console.log('Updated purchase from server:', updatedPurchase);
+        console.log('Updated buy_date:', updatedPurchase?.buy_date);
+        
         setPurchases(purchasesData);
         
         setIsPaying(prev => ({ ...prev, [purchaseId]: false }));
@@ -425,24 +446,33 @@ function UserDetails() {
         const response = await axios.get(`http://localhost:5000/api/purchases/${purchaseId}`);
         const purchase = response.data;
         
-        // Format dates properly
-        const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
+        // Log the exact date format received from the server
+        console.log('Original purchase data for undo:', purchase);
+        console.log('Original buy_date for undo:', purchase.buy_date);
         
-        // Prepare properly formatted data for the server
+        // Create a new object with EXACTLY the same buy_date as received
         const purchaseData = {
           user_id: purchase.user_id,
-          buy_date: formatDate(purchase.buy_date),
-          immediate: false, // Keep as credit purchase
-          interest_percentage: purchase.interest_percentage, // Keep original interest percentage
+          buy_date: purchase.buy_date, // Keep exactly as received, no manipulation
+          immediate: false,
+          interest_percentage: purchase.interest_percentage,
           total_amount: parseFloat(purchase.total_amount),
-          paid_date: null // Remove paid_date
+          paid_date: null
         };
+        
+        console.log('Sending to server for undo:', purchaseData);
         
         // Update the purchase using our API utility
         await updatePurchase(purchaseId, purchaseData);
         
         // Fetch user's purchases again to ensure we have the latest data
         const purchasesData = await fetchUserPurchases(id);
+        
+        // Log the updated purchase to verify the date wasn't changed
+        const updatedPurchase = purchasesData.find(p => p.id === purchaseId);
+        console.log('Updated purchase after undo:', updatedPurchase);
+        console.log('Updated buy_date after undo:', updatedPurchase?.buy_date);
+        
         setPurchases(purchasesData);
         
         setIsPaying(prev => ({ ...prev, [purchaseId]: false }));

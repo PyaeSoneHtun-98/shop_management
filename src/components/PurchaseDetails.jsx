@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import axios from 'axios';
 import { format } from 'date-fns';
-import { FaEdit, FaTrash, FaArrowLeft, FaUser, FaCalendarAlt, FaDollarSign, FaPercentage, FaClock, FaInfoCircle, FaCheckCircle, FaPhone, FaMapMarkerAlt, FaEnvelope, FaShoppingCart, FaMoneyBillWave, FaTruck } from 'react-icons/fa';
+import { FaShoppingCart, FaUser, FaCalendarAlt, FaMoneyBillWave, FaEdit, FaArrowLeft, FaPercentage, FaCheckCircle, FaTimesCircle, FaTrash, FaInfoCircle, FaEnvelope, FaPhone, FaMapMarkerAlt, FaDollarSign, FaClock } from 'react-icons/fa';
 
 function PurchaseDetails() {
   const { id } = useParams();
@@ -50,14 +50,17 @@ function PurchaseDetails() {
         // Format dates properly
         const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
         
+        // Get today's date for paid_date
+        const today = new Date().toISOString().split('T')[0];
+        
         // Prepare properly formatted data for the server
         const purchaseData = {
           user_id: purchase.user_id,
-          buy_date: formatDate(purchase.buy_date),
-          immediate: true, // Set to immediate payment
-          deposit_percentage: 0, // Set deposit to 0
+          buy_date: purchase.buy_date,
+          immediate: false,
+          interest_percentage: purchase.interest_percentage,
           total_amount: parseFloat(purchase.total_amount),
-          due_date: null // No due date needed for immediate payment
+          paid_date: today
         };
         
         // Update the purchase
@@ -101,8 +104,9 @@ function PurchaseDetails() {
     );
   };
 
-  // Determine if this is a deposit payment
-  const isDepositPayment = purchase.payment_type === 'deposit';
+  // Determine if this is a credit purchase
+  const isCreditPurchase = purchase.interest_percentage > 0;
+  const isPaid = purchase.paid_date !== null;
 
   return (
     <div className="bg-gray-900 p-6 rounded-lg shadow-sm">
@@ -142,6 +146,48 @@ function PurchaseDetails() {
           </Link>
         </div>
       </div>
+
+      {/* Credit Purchase Status Banner - Only show for credit purchases */}
+      {isCreditPurchase && (
+        <div className={`mb-6 p-3 rounded-lg flex justify-between items-center ${isPaid ? 'bg-green-800' : 'bg-yellow-800'}`}>
+          <div className="flex items-center">
+            {isPaid ? (
+              <>
+                <FaCheckCircle className="text-green-300 mr-2 text-xl" />
+                <span className="text-green-300 font-bold text-lg">PAID</span>
+              </>
+            ) : (
+              <>
+                <FaTimesCircle className="text-yellow-300 mr-2 text-xl" />
+                <span className="text-yellow-300 font-bold text-lg">UNPAID</span>
+              </>
+            )}
+          </div>
+          {isPaid ? (
+            <span className="text-green-300">
+              Payment received on {purchase.paid_date}
+            </span>
+          ) : (
+            <button
+              onClick={handleMarkAsPaid}
+              disabled={isPaying}
+              className="px-3 py-1 bg-yellow-700 text-white rounded hover:bg-yellow-600 transition-colors duration-200 text-sm flex items-center"
+            >
+              {isPaying ? (
+                <span className="flex items-center">
+                  <div className="animate-spin rounded-full h-4 w-4 border-t-2 border-b-2 border-white mr-2"></div>
+                  Processing...
+                </span>
+              ) : (
+                <>
+                  <FaCheckCircle className="mr-2" />
+                  Mark as Paid
+                </>
+              )}
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="bg-gray-800 p-6 rounded shadow border border-gray-700">
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -193,7 +239,7 @@ function PurchaseDetails() {
             </h3>
             <p className="mb-1 flex items-center text-gray-300">
               <span className="font-medium mr-2 flex items-center text-gray-200"><FaCalendarAlt className="mr-1 text-gray-400" /> Buy Date:</span> 
-              {format(new Date(purchase.buy_date), 'MMM dd, yyyy')}
+              {purchase.buy_date}
             </p>
             <p className="mb-1 flex items-center text-gray-300">
               <span className="font-medium mr-2 flex items-center text-gray-200"><FaDollarSign className="mr-1 text-gray-400" /> Total Amount:</span> 
@@ -202,28 +248,22 @@ function PurchaseDetails() {
             <p className="mb-1 flex items-center text-gray-300">
               <span className="font-medium mr-2 flex items-center text-gray-200"><FaDollarSign className="mr-1 text-gray-400" /> Payment Type:</span> 
               <span className={purchase.immediate ? "text-green-400 font-medium flex items-center" : ""}>
-                {purchase.immediate ? 'Immediate Payment' : 'Deposit Payment'}
+                {isCreditPurchase ? 'Credit Payment' : 'Immediate Payment'}
                 {purchase.immediate && <FaCheckCircle className="ml-1 text-green-400" />}
               </span>
             </p>
-            {!purchase.immediate && (
+            {isCreditPurchase && (
               <>
                 <p className="mb-1 flex items-center text-gray-300">
-                  <span className="font-medium mr-2 flex items-center text-gray-200"><FaPercentage className="mr-1 text-gray-400" /> Deposit Percentage:</span> 
-                  {purchase.deposit_percentage}%
+                  <span className="font-medium mr-2 flex items-center text-gray-200"><FaPercentage className="mr-1 text-gray-400" /> Interest Rate:</span> 
+                  {purchase.interest_percentage}%
                 </p>
-                <p className="mb-1 flex items-center text-gray-300">
-                  <span className="font-medium mr-2 flex items-center text-gray-200"><FaDollarSign className="mr-1 text-gray-400" /> Deposit Amount:</span> 
-                  ${(Number(purchase.total_amount) * purchase.deposit_percentage / 100).toFixed(2)}
-                </p>
-                <p className="mb-1 flex items-center text-gray-300">
-                  <span className="font-medium mr-2 flex items-center text-gray-200"><FaDollarSign className="mr-1 text-gray-400" /> Remaining Amount:</span> 
-                  ${calculateRemainingAmount(Number(purchase.total_amount), purchase.deposit_percentage).toFixed(2)}
-                </p>
-                <p className="mb-1 flex items-center text-gray-300">
-                  <span className="font-medium mr-2 flex items-center text-gray-200"><FaClock className="mr-1 text-gray-400" /> Due Date:</span> 
-                  {purchase.due_date ? format(new Date(purchase.due_date), 'MMM dd, yyyy') : 'N/A'}
-                </p>
+                {isPaid && (
+                  <p className="mb-1 flex items-center text-gray-300">
+                    <span className="font-medium mr-2 flex items-center text-gray-200"><FaCalendarAlt className="mr-1 text-gray-400" /> Paid Date:</span> 
+                    <span className="text-green-400">{purchase.paid_date}</span>
+                  </p>
+                )}
               </>
             )}
           </div>
