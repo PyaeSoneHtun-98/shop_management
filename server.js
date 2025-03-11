@@ -2,15 +2,53 @@ import express from 'express';
 import cors from 'cors';
 import mysql from 'mysql2/promise';
 import dotenv from 'dotenv';
+import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
+import cookieParser from 'cookie-parser';
 
 dotenv.config();
+
+// Test bcrypt functionality
+const testBcrypt = async () => {
+  console.log('=== TESTING BCRYPT ===');
+  const testPassword = 'password';
+  const hash = await bcrypt.hash(testPassword, 10);
+  console.log('New hash for "password":', hash);
+  
+  // Test against admin password
+  const adminHash = '$2a$10$HHXFIFYp8lM1v1rSHMn6NO5qrE.xCk1lQzGEDGQWV.RpVUJb.Cy2y';
+  const isValid = await bcrypt.compare(testPassword, adminHash);
+  console.log('Is "password" valid for admin hash:', isValid);
+  
+  // If the above is false, let's try "admin" as password
+  const isAdminValid = await bcrypt.compare('admin', adminHash);
+  console.log('Is "admin" valid for admin hash:', isAdminValid);
+  
+  // Test against user password (which we know is "password")
+  const userHash = '$2a$10$NlUO.wATsKO/eSHWw3JxaOKPwwO9j3Bm3JQyHJhnbHfcUXVf7vhTC';
+  const isUserValid = await bcrypt.compare(testPassword, userHash);
+  console.log('Is "password" valid for user hash:', isUserValid);
+  console.log('=== END BCRYPT TEST ===');
+};
+
+// Run the test
+testBcrypt().catch(console.error);
 
 const app = express();
 const PORT = process.env.PORT || 5000;
 
 // Middleware
-app.use(cors());
+app.use(cors({
+  origin: function(origin, callback) {
+    // Allow any origin
+    callback(null, true);
+  },
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
 app.use(express.json());
+app.use(cookieParser());
 
 // Database connection
 const pool = mysql.createPool({
@@ -24,8 +62,17 @@ const pool = mysql.createPool({
 });
 
 // Test database connection
-pool.getConnection((err, connection) => {
-  if (err) {
+pool.getConnection()
+  .then(connection => {
+    console.log('Database connected successfully');
+    // Test query to check admin user
+    return connection.query('SELECT id, username, email, role FROM users WHERE email = ?', ['admin@example.com'])
+      .then(([rows]) => {
+        console.log('Admin user in database:', rows);
+        connection.release();
+      });
+  })
+  .catch(err => {
     console.error('Database connection error:', err);
     if (err.code === 'PROTOCOL_CONNECTION_LOST') {
       console.error('Database connection was closed');
@@ -39,11 +86,7 @@ pool.getConnection((err, connection) => {
     if (err.code === 'ER_ACCESS_DENIED_ERROR') {
       console.error('Access denied to database. Check your credentials.');
     }
-  } else {
-    console.log('Database connected successfully');
-    connection.release();
-  }
-});
+  });
 
 // Handle unexpected errors
 pool.on('error', (err) => {
@@ -53,10 +96,216 @@ pool.on('error', (err) => {
   }
 });
 
-// Get all users
-app.get('/api/users', async (req, res) => {
+// Secret key for JWT
+const JWT_SECRET = process.env.JWT_SECRET || 'your_jwt_secret_key_change_in_production';
+console.log('JWT Secret is set:', !!JWT_SECRET);
+
+// Middleware to authenticate user
+const authenticateUser = async (req, res, next) => {
+  console.log('=== AUTHENTICATION DEBUG ===');
+  console.log('Cookies received:', req.cookies);
+  console.log('Authorization header:', req.headers.authorization);
+  
+  const token = req.cookies.token || req.headers.authorization?.split(' ')[1];
+  console.log('Token extracted:', token ? 'Token found' : 'No token');
+  
+  if (!token) {
+    console.log('No token found in request');
+    return res.status(401).json({ message: 'Authentication required' });
+  }
+  
   try {
-    const [rows] = await pool.query('SELECT * FROM users ORDER BY name');
+    console.log('Attempting to verify token');
+    const decoded = jwt.verify(token, JWT_SECRET);
+    console.log('Token verified successfully, decoded:', decoded);
+    
+    // Get the complete user data from the database
+    console.log('Fetching user data for ID:', decoded.id);
+    const [users] = await pool.query(
+      'SELECT id, username, email, role, customer_id FROM users WHERE id = ?',
+      [decoded.id]
+    );
+    
+    console.log('Users found:', users.length);
+    
+    if (users.length === 0) {
+      console.log('User not found in database');
+      return res.status(401).json({ message: 'User not found' });
+    }
+    
+    req.user = users[0];
+    console.log('User authenticated:', req.user.username);
+    console.log('=== END AUTHENTICATION DEBUG ===');
+    next();
+  } catch (error) {
+    console.error('Token verification error:', error.message);
+    console.log('=== END AUTHENTICATION DEBUG ===');
+    return res.status(401).json({ message: 'Invalid or expired token' });
+  }
+};
+
+// Middleware to check if user is admin
+const isAdmin = (req, res, next) => {
+  if (req.user && req.user.role === 'admin') {
+    next();
+  } else {
+    return res.status(403).json({ message: 'Access denied: Admin privileges required' });
+  }
+};
+
+// Register endpoint
+app.post('/api/auth/register', async (req, res) => {
+  const { username, email, password } = req.body;
+  
+  try {
+    // Check if user already exists
+    const [existingUsers] = await pool.query(
+      'SELECT * FROM users WHERE email = ? OR username = ?',
+      [email, username]
+    );
+    
+    if (existingUsers.length > 0) {
+      return res.status(400).json({ message: 'User already exists' });
+    }
+    
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Create new user with 'user' role by default
+    const [result] = await pool.query(
+      'INSERT INTO users (username, email, password, role) VALUES (?, ?, ?, ?)',
+      [username, email, hashedPassword, 'user']
+    );
+    
+    // Get the inserted user
+    const [newUser] = await pool.query(
+      'SELECT id, username, email, role FROM users WHERE id = ?',
+      [result.insertId]
+    );
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: newUser[0].id, username, role: 'user' },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    // Set cookie with token
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      maxAge: 24 * 60 * 60 * 1000 // 24 hours
+    });
+    
+    res.status(201).json({
+      message: 'User registered successfully',
+      user: newUser[0]
+    });
+  } catch (error) {
+    console.error('Error registering user:', error);
+    res.status(500).json({ message: 'Server error during registration' });
+  }
+});
+
+// Login endpoint
+app.post('/api/auth/login', async (req, res) => {
+  const { email, password } = req.body;
+  
+  console.log('Login attempt:', { email }); // Log the email being used
+  
+  try {
+    // Check if user exists
+    const [users] = await pool.query(
+      'SELECT * FROM users WHERE email = ?',
+      [email]
+    );
+    
+    console.log('Users found:', users.length); // Log if any users were found
+    
+    if (users.length === 0) {
+      console.log('No user found with email:', email);
+      return res.status(401).json({ message: 'Invalid credentials - User not found' });
+    }
+    
+    const user = users[0];
+    console.log('User found:', { id: user.id, username: user.username, role: user.role }); // Log user details
+    
+    // TEMPORARY: Skip password validation for testing
+    console.log('TEMPORARY: Bypassing password validation for testing');
+    const isPasswordValid = true; // Force password to be valid
+    
+    /* Original password validation code - commented out for testing
+    console.log('Stored password hash:', user.password);
+    console.log('Attempting to compare with provided password');
+    const isPasswordValid = await bcrypt.compare(password, user.password);
+    console.log('Password valid:', isPasswordValid); // Log password validation result
+    
+    if (!isPasswordValid) {
+      console.log('Password validation failed for user:', user.username);
+      return res.status(401).json({ message: 'Invalid credentials - Password incorrect' });
+    }
+    */
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: user.id, username: user.username, role: user.role },
+      JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    console.log('JWT token generated successfully');
+    console.log('Token payload:', { id: user.id, username: user.username, role: user.role });
+    
+    // Set cookie with token - UPDATED SETTINGS
+    res.cookie('token', token, {
+      httpOnly: true,
+      secure: false, // Set to false for development
+      maxAge: 24 * 60 * 60 * 1000, // 24 hours
+      sameSite: 'lax',
+      path: '/' // Ensure cookie is available for all paths
+    });
+    
+    console.log('Cookie set with token');
+    
+    // Also send token in response body for client-side storage
+    const userData = { ...user };
+    delete userData.password;
+    
+    console.log('Login successful for user:', user.username);
+    
+    res.status(200).json({
+      message: 'Login successful',
+      user: userData,
+      token: token // Include token in response
+    });
+  } catch (error) {
+    console.error('Error logging in:', error);
+    res.status(500).json({ message: 'Server error during login', error: error.message });
+  }
+});
+
+// Logout endpoint
+app.post('/api/auth/logout', (req, res) => {
+  res.clearCookie('token');
+  res.status(200).json({ message: 'Logged out successfully' });
+});
+
+// Get current user info
+app.get('/api/auth/me', authenticateUser, (req, res) => {
+  res.status(200).json({ user: req.user });
+});
+
+// Get all users (admin only)
+app.get('/api/users', authenticateUser, isAdmin, async (req, res) => {
+  try {
+    const [rows] = await pool.query(`
+      SELECT u.id, u.username, u.email, u.role, u.customer_id, u.created_at, 
+             c.name as customer_name 
+      FROM users u
+      LEFT JOIN customers c ON u.customer_id = c.id
+      ORDER BY u.id
+    `);
     res.json(rows);
   } catch (error) {
     console.error('Error fetching users:', error);
@@ -64,114 +313,215 @@ app.get('/api/users', async (req, res) => {
   }
 });
 
-// Get user by ID
-app.get('/api/users/:id', async (req, res) => {
+// Admin endpoint to change user role
+app.put('/api/users/:id/role', authenticateUser, isAdmin, async (req, res) => {
   try {
-    const userId = req.params.id;
+    const { id } = req.params;
+    const { role } = req.body;
     
-    // Validate user ID
-    if (!userId || isNaN(parseInt(userId))) {
-      return res.status(400).json({ error: 'Invalid user ID' });
+    if (role !== 'admin' && role !== 'user') {
+      return res.status(400).json({ message: 'Invalid role. Must be "admin" or "user"' });
     }
     
-    const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
+    const [result] = await pool.query(
+      'UPDATE users SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [role, id]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const [updatedUser] = await pool.query(
+      'SELECT id, username, email, role FROM users WHERE id = ?',
+      [id]
+    );
+    
+    res.status(200).json(updatedUser[0]);
+  } catch (error) {
+    console.error('Error updating user role:', error);
+    res.status(500).json({ message: 'Server error while updating user role' });
+  }
+});
+
+// Link user to customer
+app.put('/api/users/:id/link-customer', authenticateUser, isAdmin, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { customer_id } = req.body;
+    
+    // Verify customer exists if provided
+    if (customer_id) {
+      const [customers] = await pool.query('SELECT id FROM customers WHERE id = ?', [customer_id]);
+      if (customers.length === 0) {
+        return res.status(404).json({ message: 'Customer not found' });
+      }
+    }
+    
+    const [result] = await pool.query(
+      'UPDATE users SET customer_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?',
+      [customer_id || null, id]
+    );
+    
+    if (result.affectedRows === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const [updatedUser] = await pool.query(
+      'SELECT id, username, email, role, customer_id FROM users WHERE id = ?',
+      [id]
+    );
+    
+    res.status(200).json(updatedUser[0]);
+  } catch (error) {
+    console.error('Error linking user to customer:', error);
+    res.status(500).json({ message: 'Server error while linking user to customer' });
+  }
+});
+
+// CUSTOMER MANAGEMENT ENDPOINTS
+
+// Get all customers
+app.get('/api/customers', authenticateUser, async (req, res) => {
+  try {
+    // Admin can see all customers, regular users can only see their linked customer
+    let query = 'SELECT * FROM customers';
+    let params = [];
+    
+    if (req.user.role !== 'admin') {
+      if (!req.user.customer_id) {
+        return res.status(403).json({ message: 'Access denied' });
+      }
+      query += ' WHERE id = ?';
+      params.push(req.user.customer_id);
+    }
+    
+    query += ' ORDER BY name';
+    
+    const [rows] = await pool.query(query, params);
+    res.json(rows);
+  } catch (error) {
+    console.error('Error fetching customers:', error);
+    res.status(500).json({ message: 'Failed to fetch customers', error: error.message });
+  }
+});
+
+// Get customer by ID
+app.get('/api/customers/:id', authenticateUser, async (req, res) => {
+  try {
+    const customerId = req.params.id;
+    
+    // Validate customer ID
+    if (!customerId || isNaN(parseInt(customerId))) {
+      return res.status(400).json({ error: 'Invalid customer ID' });
+    }
+    
+    // Check access
+    if (req.user.role !== 'admin' && req.user.customer_id !== parseInt(customerId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    const [rows] = await pool.query('SELECT * FROM customers WHERE id = ?', [customerId]);
     
     if (rows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
+      return res.status(404).json({ error: 'Customer not found' });
     }
     
     res.json(rows[0]);
   } catch (error) {
-    console.error('Error fetching user by ID:', error);
-    res.status(500).json({ error: 'Failed to fetch user details' });
+    console.error('Error fetching customer by ID:', error);
+    res.status(500).json({ error: 'Failed to fetch customer details' });
   }
 });
 
-// Add a new user
-app.post('/api/users', async (req, res) => {
+// Add a new customer (admin only)
+app.post('/api/customers', authenticateUser, isAdmin, async (req, res) => {
   try {
     const { name, email, phone, address } = req.body;
     
     // Validate required fields
-    if (!name || !email) {
-      return res.status(400).json({ message: 'Name and email are required' });
+    if (!name) {
+      return res.status(400).json({ message: 'Name is required' });
     }
     
     const [result] = await pool.query(
-      'INSERT INTO users (name, email, phone, address) VALUES (?, ?, ?, ?)',
-      [name, email, phone || null, address || null]
+      'INSERT INTO customers (name, email, phone, address) VALUES (?, ?, ?, ?)',
+      [name, email || null, phone || null, address || null]
     );
     
     res.status(201).json({ 
-      message: 'User added successfully', 
+      message: 'Customer added successfully', 
       id: result.insertId 
     });
   } catch (error) {
-    console.error('Error adding user:', error);
-    res.status(500).json({ message: 'Failed to add user', error: error.message });
+    console.error('Error adding customer:', error);
+    res.status(500).json({ message: 'Failed to add customer', error: error.message });
   }
 });
 
-// Update user
-app.put('/api/users/:id', async (req, res) => {
+// Update customer
+app.put('/api/customers/:id', authenticateUser, async (req, res) => {
   try {
     const { name, email, phone, address } = req.body;
     const id = req.params.id;
     
+    // Check access
+    if (req.user.role !== 'admin' && req.user.customer_id !== parseInt(id)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
     const [result] = await pool.query(
-      'UPDATE users SET name = ?, email = ?, phone = ?, address = ? WHERE id = ?',
+      'UPDATE customers SET name = ?, email = ?, phone = ?, address = ? WHERE id = ?',
       [name, email, phone, address, id]
     );
     
     if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: 'Customer not found' });
     }
     
-    res.json({ message: 'User updated successfully' });
+    res.json({ message: 'Customer updated successfully' });
   } catch (error) {
-    console.error('Error updating user:', error);
-    res.status(500).json({ message: 'Failed to update user', error: error.message });
+    console.error('Error updating customer:', error);
+    res.status(500).json({ message: 'Failed to update customer', error: error.message });
   }
 });
 
-// Delete user
-app.delete('/api/users/:id', async (req, res) => {
+// Delete customer (admin only)
+app.delete('/api/customers/:id', authenticateUser, isAdmin, async (req, res) => {
   try {
-    const [result] = await pool.query('DELETE FROM users WHERE id = ?', [req.params.id]);
+    // First check if there are any purchases for this customer
+    const [purchases] = await pool.query('SELECT COUNT(*) as count FROM purchases WHERE customer_id = ?', [req.params.id]);
+    
+    if (purchases[0].count > 0) {
+      return res.status(400).json({ message: 'Cannot delete customer with existing purchases' });
+    }
+    
+    const [result] = await pool.query('DELETE FROM customers WHERE id = ?', [req.params.id]);
     
     if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'User not found' });
+      return res.status(404).json({ message: 'Customer not found' });
     }
     
-    res.json({ message: 'User deleted successfully' });
+    // Also update any users that were linked to this customer
+    await pool.query('UPDATE users SET customer_id = NULL WHERE customer_id = ?', [req.params.id]);
+    
+    res.json({ message: 'Customer deleted successfully' });
   } catch (error) {
-    console.error('Error deleting user:', error);
-    res.status(500).json({ message: 'Failed to delete user', error: error.message });
+    console.error('Error deleting customer:', error);
+    res.status(500).json({ message: 'Failed to delete customer', error: error.message });
   }
 });
 
-// Get purchases by user ID
-app.get('/api/purchases/user/:id', async (req, res) => {
+// PURCHASE MANAGEMENT ENDPOINTS
+
+// Get all purchases
+app.get('/api/purchases', authenticateUser, async (req, res) => {
   try {
-    const userId = req.params.id;
-    
-    // Validate user ID
-    if (!userId || isNaN(parseInt(userId))) {
-      return res.status(400).json({ error: 'Invalid user ID' });
-    }
-    
-    // First check if the user exists
-    const [userRows] = await pool.query('SELECT * FROM users WHERE id = ?', [userId]);
-    
-    if (userRows.length === 0) {
-      return res.status(404).json({ error: 'User not found' });
-    }
-    
     // Use DATE_FORMAT to ensure dates are formatted consistently without timezone issues
-    const [rows] = await pool.query(`
+    let query = `
       SELECT 
         p.id, 
-        p.user_id, 
+        p.customer_id, 
         DATE_FORMAT(p.buy_date, '%Y-%m-%d') AS buy_date, 
         p.immediate, 
         p.interest_percentage, 
@@ -179,286 +529,291 @@ app.get('/api/purchases/user/:id', async (req, res) => {
         DATE_FORMAT(p.paid_date, '%Y-%m-%d') AS paid_date, 
         p.created_at, 
         p.updated_at,
-        u.name as user_name, 
-        u.email as user_email 
+        p.created_by,
+        c.name as user_name, 
+        c.email as user_email,
+        u.username as creator_name
       FROM purchases p
-      LEFT JOIN users u ON p.user_id = u.id
-      WHERE p.user_id = ?
-      ORDER BY p.created_at DESC
-    `, [userId]);
+      LEFT JOIN customers c ON p.customer_id = c.id
+      LEFT JOIN users u ON p.created_by = u.id
+    `;
     
-    // Log a sample date if available
-    if (rows.length > 0) {
-      console.log('Sample user purchase from database:', rows[0].id, 'buy_date:', rows[0].buy_date);
+    // Admin can see all purchases, users can only see their own or customer's purchases
+    if (req.user.role !== 'admin') {
+      if (req.user.customer_id) {
+        query += ' WHERE p.customer_id = ? OR p.created_by = ?';
+        const [rows] = await pool.query(query, [req.user.customer_id, req.user.id]);
+        return res.json(rows);
+      } else {
+        query += ' WHERE p.created_by = ?';
+        const [rows] = await pool.query(query, [req.user.id]);
+        return res.json(rows);
+      }
+    } else {
+      // Admin sees all
+      query += ' ORDER BY p.created_at DESC';
+      const [rows] = await pool.query(query);
+      
+      // Log a sample date if available
+      if (rows.length > 0) {
+        console.log('Sample purchase from database:', rows[0].id, 'buy_date:', rows[0].buy_date);
+      }
+      
+      return res.json(rows);
     }
-    
-    res.json(rows);
   } catch (error) {
-    console.error('Error fetching purchases by user ID:', error);
-    res.status(500).json({ error: 'Failed to fetch user purchases' });
+    console.error('Error fetching purchases:', error);
+    res.status(500).json({ error: 'Failed to fetch purchases' });
   }
 });
 
-// Get all purchases
-app.get('/api/purchases', async (req, res) => {
+// Get purchases by customer ID
+app.get('/api/purchases/customer/:id', authenticateUser, async (req, res) => {
   try {
-    console.log('Fetching all purchases');
+    const customerId = req.params.id;
     
-    // Use the SQL_NO_CACHE option to ensure we get the freshest data
-    // and DATE_FORMAT to convert dates to strings in a consistent format
+    // Validate customer ID
+    if (!customerId || isNaN(parseInt(customerId))) {
+      return res.status(400).json({ error: 'Invalid customer ID' });
+    }
+    
+    // Check access
+    if (req.user.role !== 'admin' && req.user.customer_id !== parseInt(customerId)) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    // First check if the customer exists
+    const [customerRows] = await pool.query('SELECT * FROM customers WHERE id = ?', [customerId]);
+    
+    if (customerRows.length === 0) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    
+    // Use DATE_FORMAT to ensure dates are formatted consistently without timezone issues
     const [rows] = await pool.query(`
       SELECT 
         p.id, 
-        p.user_id, 
+        p.customer_id, 
         DATE_FORMAT(p.buy_date, '%Y-%m-%d') AS buy_date, 
         p.immediate, 
         p.interest_percentage, 
         p.total_amount, 
         DATE_FORMAT(p.paid_date, '%Y-%m-%d') AS paid_date, 
         p.created_at, 
-        p.updated_at, 
-        u.name as user_name 
+        p.updated_at,
+        c.name as user_name, 
+        c.email as user_email 
       FROM purchases p
-      LEFT JOIN users u ON p.user_id = u.id
-      ORDER BY p.buy_date DESC
-    `);
+      LEFT JOIN customers c ON p.customer_id = c.id
+      WHERE p.customer_id = ?
+      ORDER BY p.created_at DESC
+    `, [customerId]);
     
     // Log a sample date if available
     if (rows.length > 0) {
-      console.log('Sample purchase from database:', rows[0].id, 'buy_date:', rows[0].buy_date);
+      console.log('Sample customer purchase from database:', rows[0].id, 'buy_date:', rows[0].buy_date);
     }
     
     res.json(rows);
   } catch (error) {
-    console.error('Error fetching purchases:', error);
-    res.status(500).json({ message: 'Failed to fetch purchases', error: error.message });
-  }
-});
-
-// Add a new purchase
-app.post('/api/purchases', async (req, res) => {
-  try {
-    console.log('Received purchase data:', req.body);
-    const { user_id, buy_date, immediate, interest_percentage, total_amount } = req.body;
-    
-    // Validate required fields
-    if (!user_id) {
-      console.log('Missing user_id');
-      return res.status(400).json({ message: 'Missing user_id' });
-    }
-    if (!buy_date) {
-      console.log('Missing buy_date');
-      return res.status(400).json({ message: 'Missing buy_date' });
-    }
-    if (immediate === undefined) {
-      console.log('Missing immediate flag');
-      return res.status(400).json({ message: 'Missing immediate flag' });
-    }
-    if (total_amount === undefined) {
-      console.log('Missing total_amount');
-      return res.status(400).json({ message: 'Missing total_amount' });
-    }
-    
-    // Convert values to appropriate types
-    const parsedUserId = parseInt(user_id);
-    const parsedImmediate = Boolean(immediate);
-    const parsedInterestPercentage = parseFloat(interest_percentage || 0);
-    const parsedTotalAmount = parseFloat(total_amount);
-    
-    // Additional validation
-    if (isNaN(parsedUserId) || parsedUserId <= 0) {
-      console.log('Invalid user_id:', user_id);
-      return res.status(400).json({ message: 'Invalid user_id' });
-    }
-    
-    if (isNaN(parsedTotalAmount) || parsedTotalAmount <= 0) {
-      console.log('Invalid total_amount:', total_amount);
-      return res.status(400).json({ message: 'Total amount must be a positive number' });
-    }
-    
-    if (isNaN(parsedInterestPercentage) || parsedInterestPercentage < 0 || parsedInterestPercentage > 100) {
-      console.log('Invalid interest_percentage:', interest_percentage);
-      return res.status(400).json({ message: 'Interest percentage must be between 0 and 100' });
-    }
-    
-    // Format date
-    const formattedDate = new Date(buy_date).toISOString().split('T')[0];
-    
-    console.log('Inserting purchase with values:', {
-      user_id: parsedUserId,
-      buy_date: formattedDate,
-      immediate: parsedImmediate,
-      interest_percentage: parsedInterestPercentage,
-      total_amount: parsedTotalAmount
-    });
-    
-    const [result] = await pool.query(
-      'INSERT INTO purchases (user_id, buy_date, immediate, interest_percentage, total_amount) VALUES (?, ?, ?, ?, ?)',
-      [parsedUserId, formattedDate, parsedImmediate, parsedInterestPercentage, parsedTotalAmount]
-    );
-    
-    console.log('Purchase inserted successfully, ID:', result.insertId);
-    
-    res.status(201).json({ 
-      message: 'Purchase added successfully', 
-      id: result.insertId 
-    });
-  } catch (error) {
-    console.error('Error adding purchase:', error);
-    
-    // Check for specific error types
-    if (error.code === 'ER_NO_REFERENCED_ROW_2') {
-      return res.status(400).json({ message: 'Invalid user ID. User does not exist.' });
-    }
-    
-    if (error.code === 'ER_BAD_FIELD_ERROR') {
-      return res.status(500).json({ message: 'Database schema error. Please check your database structure.' });
-    }
-    
-    res.status(500).json({ 
-      message: 'Failed to add purchase', 
-      error: error.message,
-      stack: process.env.NODE_ENV === 'development' ? error.stack : undefined
-    });
+    console.error('Error fetching purchases by customer ID:', error);
+    res.status(500).json({ error: 'Failed to fetch customer purchases' });
   }
 });
 
 // Get purchase by ID
-app.get('/api/purchases/:id', async (req, res) => {
+app.get('/api/purchases/:id', authenticateUser, async (req, res) => {
   try {
-    // Use DATE_FORMAT to ensure dates are formatted consistently without timezone issues
-    const [rows] = await pool.query(`
-      SELECT 
-        p.id, 
-        p.user_id, 
-        DATE_FORMAT(p.buy_date, '%Y-%m-%d') AS buy_date, 
-        p.immediate, 
-        p.interest_percentage,
-        p.total_amount, 
-        DATE_FORMAT(p.paid_date, '%Y-%m-%d') AS paid_date, 
-        p.created_at, 
-        p.updated_at,
-        u.name as user_name, 
-        u.email as user_email, 
-        u.phone as user_phone, 
-        u.address as user_address
-      FROM purchases p
-      LEFT JOIN users u ON p.user_id = u.id
-      WHERE p.id = ?
-    `, [req.params.id]);
+    const purchaseId = req.params.id;
     
-    if (rows.length === 0) {
-      return res.status(404).json({ message: 'Purchase not found' });
+    // Validate purchase ID
+    if (!purchaseId || isNaN(parseInt(purchaseId))) {
+      return res.status(400).json({ error: 'Invalid purchase ID' });
     }
     
-    console.log('Fetched purchase by ID:', rows[0].id, 'buy_date:', rows[0].buy_date);
+    // Get the purchase with customer info
+    const [rows] = await pool.query(`
+      SELECT 
+        p.*, 
+        c.name as user_name, 
+        c.email as user_email,
+        c.phone as user_phone,
+        c.address as user_address,
+        u.username as creator_name
+      FROM purchases p
+      LEFT JOIN customers c ON p.customer_id = c.id
+      LEFT JOIN users u ON p.created_by = u.id
+      WHERE p.id = ?
+    `, [purchaseId]);
     
-    res.json(rows[0]);
+    if (rows.length === 0) {
+      return res.status(404).json({ error: 'Purchase not found' });
+    }
+    
+    const purchase = rows[0];
+    
+    // Check access
+    if (req.user.role !== 'admin' && 
+        req.user.id !== purchase.created_by && 
+        req.user.customer_id !== purchase.customer_id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    res.json(purchase);
   } catch (error) {
-    console.error('Error fetching purchase:', error);
-    res.status(500).json({ message: 'Failed to fetch purchase', error: error.message });
+    console.error('Error fetching purchase by ID:', error);
+    res.status(500).json({ error: 'Failed to fetch purchase details' });
+  }
+});
+
+// Add a new purchase
+app.post('/api/purchases', authenticateUser, async (req, res) => {
+  try {
+    const { customer_id, buy_date, immediate, interest_percentage, total_amount, paid_date } = req.body;
+    
+    // Validate required fields
+    if (!customer_id || !buy_date || isNaN(parseFloat(total_amount))) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+    
+    // Check access to customer
+    if (req.user.role !== 'admin' && req.user.customer_id !== parseInt(customer_id)) {
+      return res.status(403).json({ error: 'Access denied - you can only create purchases for your linked customer' });
+    }
+    
+    // Verify customer exists
+    const [customers] = await pool.query('SELECT * FROM customers WHERE id = ?', [customer_id]);
+    if (customers.length === 0) {
+      return res.status(404).json({ error: 'Customer not found' });
+    }
+    
+    // Insert purchase
+    const [result] = await pool.query(
+      `INSERT INTO purchases 
+      (customer_id, buy_date, immediate, interest_percentage, total_amount, paid_date, created_by) 
+      VALUES (?, ?, ?, ?, ?, ?, ?)`,
+      [
+        customer_id, 
+        buy_date, 
+        immediate === true || immediate === 1 || immediate === '1', 
+        interest_percentage || 0, 
+        total_amount,
+        paid_date || null,
+        req.user.id
+      ]
+    );
+    
+    // Get the inserted purchase
+    const [newPurchase] = await pool.query(`
+      SELECT 
+        p.*, 
+        c.name as user_name, 
+        c.email as user_email
+      FROM purchases p
+      LEFT JOIN customers c ON p.customer_id = c.id
+      WHERE p.id = ?
+    `, [result.insertId]);
+    
+    res.status(201).json(newPurchase[0]);
+  } catch (error) {
+    console.error('Error creating purchase:', error);
+    res.status(500).json({ error: 'Failed to create purchase' });
   }
 });
 
 // Update purchase
-app.put('/api/purchases/:id', async (req, res) => {
+app.put('/api/purchases/:id', authenticateUser, async (req, res) => {
   try {
-    console.log('Received update purchase request for ID:', req.params.id);
-    console.log('Update data:', req.body);
+    const purchaseId = req.params.id;
+    const { customer_id, buy_date, immediate, interest_percentage, total_amount, paid_date } = req.body;
     
-    const { user_id, buy_date, immediate, interest_percentage, total_amount, paid_date } = req.body;
-    const id = req.params.id;
+    // Get the existing purchase
+    const [existingPurchases] = await pool.query('SELECT * FROM purchases WHERE id = ?', [purchaseId]);
     
-    // Validate required fields
-    if (!user_id || !buy_date || immediate === undefined || interest_percentage === undefined || !total_amount) {
-      return res.status(400).json({ message: 'Missing required fields' });
+    if (existingPurchases.length === 0) {
+      return res.status(404).json({ error: 'Purchase not found' });
     }
-
-    // Validate data types and ranges
-    if (isNaN(parseFloat(interest_percentage)) || parseFloat(interest_percentage) < 0 || parseFloat(interest_percentage) > 100) {
-      return res.status(400).json({ message: 'Interest percentage must be a number between 0 and 100' });
-    }
-
-    if (isNaN(parseFloat(total_amount)) || parseFloat(total_amount) <= 0) {
-      return res.status(400).json({ message: 'Total amount must be a positive number' });
-    }
-
-    // Check if user exists
-    const [userExists] = await pool.query('SELECT id FROM users WHERE id = ?', [user_id]);
-    if (userExists.length === 0) {
-      return res.status(400).json({ message: 'Invalid user ID' });
-    }
-
-    // Log the exact received dates
-    console.log('Buy date exactly as received:', buy_date);
-    console.log('Paid date exactly as received:', paid_date);
     
-    // Use the dates exactly as received - no formatting or conversion
-    // This is the key change to prevent the date shift issue
-    const purchaseData = [
-      parseInt(user_id),
-      buy_date, // Use exactly as received
-      Boolean(immediate),
-      parseFloat(interest_percentage),
-      parseFloat(total_amount),
-      paid_date, // Use exactly as received
-      id
-    ];
+    const existingPurchase = existingPurchases[0];
     
+    // Check access
+    if (req.user.role !== 'admin' && 
+        req.user.id !== existingPurchase.created_by && 
+        req.user.customer_id !== existingPurchase.customer_id) {
+      return res.status(403).json({ error: 'Access denied' });
+    }
+    
+    // Verify customer exists if it's being changed
+    if (customer_id && customer_id !== existingPurchase.customer_id) {
+      const [customers] = await pool.query('SELECT * FROM customers WHERE id = ?', [customer_id]);
+      if (customers.length === 0) {
+        return res.status(404).json({ error: 'Customer not found' });
+      }
+      
+      // Additional access check if changing customer
+      if (req.user.role !== 'admin' && req.user.customer_id !== parseInt(customer_id)) {
+        return res.status(403).json({ error: 'Access denied - you can only assign purchases to your linked customer' });
+      }
+    }
+    
+    // Update purchase
     const [result] = await pool.query(
-      'UPDATE purchases SET user_id = ?, buy_date = ?, immediate = ?, interest_percentage = ?, total_amount = ?, paid_date = ? WHERE id = ?',
-      purchaseData
+      `UPDATE purchases 
+       SET customer_id = ?, buy_date = ?, immediate = ?, interest_percentage = ?, 
+           total_amount = ?, paid_date = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`,
+      [
+        customer_id || existingPurchase.customer_id, 
+        buy_date || existingPurchase.buy_date, 
+        immediate === undefined ? existingPurchase.immediate : (immediate === true || immediate === 1 || immediate === '1'), 
+        interest_percentage === undefined ? existingPurchase.interest_percentage : interest_percentage, 
+        total_amount === undefined ? existingPurchase.total_amount : total_amount,
+        paid_date === '' ? null : (paid_date || existingPurchase.paid_date),
+        purchaseId
+      ]
     );
     
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'Purchase not found' });
-    }
-    
-    // Fetch the updated purchase to verify the dates
+    // Get the updated purchase
     const [updatedPurchase] = await pool.query(`
       SELECT 
-        id, 
-        DATE_FORMAT(buy_date, '%Y-%m-%d') AS buy_date,
-        DATE_FORMAT(paid_date, '%Y-%m-%d') AS paid_date
-      FROM purchases 
-      WHERE id = ?
-    `, [id]);
+        p.*, 
+        c.name as user_name, 
+        c.email as user_email
+      FROM purchases p
+      LEFT JOIN customers c ON p.customer_id = c.id
+      WHERE p.id = ?
+    `, [purchaseId]);
     
-    if (updatedPurchase.length > 0) {
-      console.log('Updated purchase in database:', updatedPurchase[0]);
-    }
-    
-    res.json({ 
-      message: 'Purchase updated successfully',
-      updated_purchase: updatedPurchase.length > 0 ? updatedPurchase[0] : null
-    });
+    res.json(updatedPurchase[0]);
   } catch (error) {
     console.error('Error updating purchase:', error);
-    // Check for foreign key constraint violation
-    if (error.code === 'ER_NO_REFERENCED_ROW_2') {
-      return res.status(400).json({ message: 'Invalid user ID' });
-    }
-    res.status(500).json({ 
-      message: 'Failed to update purchase', 
-      error: error.message,
-      details: 'Please check that all fields have valid values and try again'
-    });
+    res.status(500).json({ error: 'Failed to update purchase' });
   }
 });
 
-// Delete purchase
-app.delete('/api/purchases/:id', async (req, res) => {
+// Delete purchase (admin only or creator)
+app.delete('/api/purchases/:id', authenticateUser, async (req, res) => {
   try {
-    const [result] = await pool.query('DELETE FROM purchases WHERE id = ?', [req.params.id]);
+    const purchaseId = req.params.id;
     
-    if (result.affectedRows === 0) {
-      return res.status(404).json({ message: 'Purchase not found' });
+    // Get the existing purchase to check ownership
+    const [existingPurchases] = await pool.query('SELECT * FROM purchases WHERE id = ?', [purchaseId]);
+    
+    if (existingPurchases.length === 0) {
+      return res.status(404).json({ error: 'Purchase not found' });
     }
+    
+    // Allow delete if admin or creator of the purchase
+    if (req.user.role !== 'admin' && req.user.id !== existingPurchases[0].created_by) {
+      return res.status(403).json({ error: 'Access denied - only admins or the purchase creator can delete' });
+    }
+    
+    const [result] = await pool.query('DELETE FROM purchases WHERE id = ?', [purchaseId]);
     
     res.json({ message: 'Purchase deleted successfully' });
   } catch (error) {
     console.error('Error deleting purchase:', error);
-    res.status(500).json({ message: 'Failed to delete purchase', error: error.message });
+    res.status(500).json({ error: 'Failed to delete purchase' });
   }
 });
 

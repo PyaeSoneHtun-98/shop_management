@@ -6,13 +6,16 @@ import DataTable from 'react-data-table-component';
 import { FaEye, FaCheckCircle, FaEdit, FaTrash, FaCalendarAlt, FaDollarSign, FaPercentage, FaUser, FaClock, FaPlus, FaSearch, FaFileExcel } from 'react-icons/fa';
 import Pagination from './Pagination';
 import * as XLSX from 'xlsx';
+import DatePicker from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
 
 function PurchaseList() {
   const [purchases, setPurchases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('');
+  const [startDate, setStartDate] = useState(null);
+  const [endDate, setEndDate] = useState(null);
   const [filterType, setFilterType] = useState('all');
   const [isPaying, setIsPaying] = useState({});
   const [successMessage, setSuccessMessage] = useState('');
@@ -22,28 +25,40 @@ function PurchaseList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
+  // Add this function at the beginning of your component
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
+
   // Define the fetchPurchases function outside useEffect so it can be reused
   const fetchPurchases = async () => {
     try {
       setLoading(true);
-      // Use fetch API to get raw response
-      const response = await fetch('http://localhost:5000/api/purchases');
-      const rawData = await response.text(); // Get raw response text
+      const response = await fetch('http://localhost:5000/api/purchases', {
+        credentials: 'include',
+        headers: getAuthHeaders()
+      });
       
-      // Parse the JSON manually
-      const purchases = JSON.parse(rawData);
-      
-      // Log some sample dates from the purchases
-      if (purchases.length > 0) {
-        console.log('Sample purchase date from fetch:', purchases[0].id, purchases[0].buy_date);
+      if (!response.ok) {
+        throw new Error(`Error ${response.status}: ${response.statusText}`);
       }
       
-      setPurchases(purchases);
-      setLoading(false);
+      const data = await response.json();
+      setPurchases(data);
     } catch (err) {
-      setError('Failed to fetch purchases. Please try again later.');
-      setLoading(false);
+      setError(err.message);
       console.error('Error fetching purchases:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -55,6 +70,13 @@ function PurchaseList() {
   // Handle refresh button click
   const handleRefresh = () => {
     fetchPurchases();
+  };
+
+  // Handle reset button click - clear all filters
+  const handleReset = () => {
+    setSearchTerm('');
+    setStartDate(null);
+    setEndDate(null);
   };
 
   const handleDelete = async (id) => {
@@ -169,7 +191,7 @@ function PurchaseList() {
   if (loading) return <div className="text-center py-4">Loading...</div>;
   if (error) return <div className="text-red-500 py-4">{error}</div>;
 
-  // Filter purchases based on active tab, search term, and selected month
+  // Filter purchases based on active tab, search term, and date range
   const filteredPurchases = purchases.filter(purchase => {
     // First, filter by tab (immediate vs credit)
     const matchesTab = activeTab === 'immediate' 
@@ -183,16 +205,20 @@ function PurchaseList() {
     const matchesSearch = !searchTerm || 
       (purchase.user_name && purchase.user_name.toLowerCase().includes(searchTerm.toLowerCase()));
     
-    // Then filter by month
-    let matchesMonth = true;
-    if (selectedMonth !== '') {
-      const purchaseDate = new Date(purchase.buy_date);
-      const purchaseMonth = purchaseDate.getMonth().toString();
-      matchesMonth = purchaseMonth === selectedMonth;
+    // Then filter by date range
+    let matchesDateRange = true;
+    if (startDate && purchase.buy_date) {
+      matchesDateRange = new Date(purchase.buy_date) >= startDate;
+    }
+    if (endDate && purchase.buy_date && matchesDateRange) {
+      // Add one day to end date to include the end date in the range
+      const endDateObj = new Date(endDate);
+      endDateObj.setDate(endDateObj.getDate() + 1);
+      matchesDateRange = new Date(purchase.buy_date) < endDateObj;
     }
     
     // Include only if it matches all filters
-    return matchesTab && matchesSearch && matchesMonth;
+    return matchesTab && matchesSearch && matchesDateRange;
   });
 
   // Define columns based on active tab
@@ -640,63 +666,14 @@ function PurchaseList() {
             Purchase History
           </h2>
         </div>
-        <Link
-          to="/add"
-          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors duration-200 flex items-center w-full sm:w-auto justify-center"
-        >
-          <FaPlus className="mr-2" />
-          Add New Purchase
-        </Link>
-      </div>
-    
-      <div className="flex flex-col sm:flex-row flex-wrap gap-4 mb-6 items-center">
-        <div className="w-full sm:flex-1 min-w-[200px]">
-          <div className="relative">
-            <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by user name..."
-              className="w-full pl-10 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-    
-        <div className="w-full sm:w-[200px]">
-          <select
-            className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          <Link
+            to="/add"
+            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap"
           >
-            <option value="">All Months</option>
-            <option value="0">January</option>
-            <option value="1">February</option>
-            <option value="2">March</option>
-            <option value="3">April</option>
-            <option value="4">May</option>
-            <option value="5">June</option>
-            <option value="6">July</option>
-            <option value="7">August</option>
-            <option value="8">September</option>
-            <option value="9">October</option>
-            <option value="10">November</option>
-            <option value="11">December</option>
-          </select>
-        </div>
-
-        <div className="w-full sm:w-auto flex gap-2">
-          <button
-            onClick={handleRefresh}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap"
-            title="Refresh Data"
-            disabled={loading}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 mr-2 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            {loading ? 'Loading...' : 'Refresh'}
-          </button>
+            <FaPlus className="mr-2" />
+            Add New Purchase
+          </Link>
           
           <button
             onClick={handleExportToExcel}
@@ -707,6 +684,68 @@ function PurchaseList() {
             Export to Excel
           </button>
         </div>
+      </div>
+    
+      <div className="flex flex-col sm:flex-row gap-4 mb-6 items-center bg-gray-800 p-3 rounded-lg">
+        <div className="flex items-center w-full sm:w-auto">
+          <label htmlFor="startDate" className="text-gray-300 mr-2 whitespace-nowrap font-medium">From :</label>
+          <div className="relative w-full">
+            <DatePicker
+              id="startDate"
+              selected={startDate}
+              onChange={date => setStartDate(date)}
+              placeholderText="DD-MM-YYYY"
+              dateFormat="dd-MM-yyyy"
+              showMonthDropdown
+              showYearDropdown
+              dropdownMode="select"
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200 pr-10"
+            />
+            <FaCalendarAlt className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+        </div>
+        
+        <div className="flex items-center w-full sm:w-auto">
+          <label htmlFor="endDate" className="text-gray-300 mr-2 whitespace-nowrap font-medium">To :</label>
+          <div className="relative w-full">
+            <DatePicker
+              id="endDate"
+              selected={endDate}
+              onChange={date => setEndDate(date)}
+              placeholderText="DD-MM-YYYY"
+              dateFormat="dd-MM-yyyy"
+              showMonthDropdown
+              showYearDropdown
+              dropdownMode="select"
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200 pr-10"
+            />
+            <FaCalendarAlt className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+        </div>
+
+        <div className="w-full sm:flex-1">
+          <div className="relative">
+            <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search"
+              className="w-full pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleReset}
+          className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap"
+          title="Reset Filters"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Reset
+        </button>
       </div>
       
       {/* Tabs */}

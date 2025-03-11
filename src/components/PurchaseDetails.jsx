@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import axios from 'axios';
 import { format } from 'date-fns';
 import { FaShoppingCart, FaUser, FaCalendarAlt, FaMoneyBillWave, FaEdit, FaArrowLeft, FaPercentage, FaCheckCircle, FaTimesCircle, FaTrash, FaInfoCircle, FaEnvelope, FaPhone, FaMapMarkerAlt, FaDollarSign, FaClock } from 'react-icons/fa';
 
@@ -13,30 +12,75 @@ function PurchaseDetails() {
   const [isPaying, setIsPaying] = useState(false);
   const [successMessage, setSuccessMessage] = useState('');
 
+  // Add auth headers function
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
+
   useEffect(() => {
     const fetchPurchase = async () => {
       try {
-        const response = await axios.get(`http://localhost:5000/api/purchases/${id}`);
-        setPurchase(response.data);
-        setLoading(false);
+        console.log('Fetching purchase details with ID:', id);
+        console.log('Token from localStorage:', localStorage.getItem('token') ? 'Found' : 'Not found');
+        
+        setLoading(true);
+        console.log('Sending request to:', `http://localhost:5000/api/purchases/${id}`);
+        console.log('With headers:', getAuthHeaders());
+        
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
+        
+        console.log('Response status:', response.status);
+        
+        if (!response.ok) {
+          console.error('Error response:', response.statusText);
+          throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        console.log('Purchase data fetched successfully:', data);
+        setPurchase(data);
       } catch (err) {
-        setError('Failed to fetch purchase details. Please try again later.');
+        console.error('Error fetching purchase details:', err);
+        setError(`Failed to fetch purchase details: ${err.message}`);
+      } finally {
         setLoading(false);
-        console.error('Error fetching purchase:', err);
       }
     };
 
+    console.log('PurchaseDetails component mounted with ID:', id);
     fetchPurchase();
   }, [id]);
 
   const handleDelete = async () => {
     if (window.confirm('Are you sure you want to delete this purchase?')) {
       try {
-        await axios.delete(`http://localhost:5000/api/purchases/${id}`);
-        navigate('/');
+        console.log('Deleting purchase with ID:', id);
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          method: 'DELETE',
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        navigate('/purchases');
       } catch (err) {
-        setError('Failed to delete purchase. Please try again later.');
         console.error('Error deleting purchase:', err);
+        setError('Failed to delete purchase. Please try again later.');
       }
     }
   };
@@ -47,15 +91,12 @@ function PurchaseDetails() {
         setIsPaying(true);
         setSuccessMessage('');
         
-        // Format dates properly
-        const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
-        
         // Get today's date for paid_date
         const today = new Date().toISOString().split('T')[0];
         
         // Prepare properly formatted data for the server
         const purchaseData = {
-          user_id: purchase.user_id,
+          customer_id: purchase.customer_id,
           buy_date: purchase.buy_date,
           immediate: false,
           interest_percentage: purchase.interest_percentage,
@@ -63,12 +104,35 @@ function PurchaseDetails() {
           paid_date: today
         };
         
-        // Update the purchase
-        await axios.put(`http://localhost:5000/api/purchases/${id}`, purchaseData);
+        console.log('Marking purchase as paid with data:', purchaseData);
+        
+        // Update the purchase using fetch with auth headers
+        const updateResponse = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          method: 'PUT',
+          headers: {
+            ...getAuthHeaders(),
+            'Content-Type': 'application/json'
+          },
+          body: JSON.stringify(purchaseData),
+          credentials: 'include'
+        });
+        
+        if (!updateResponse.ok) {
+          throw new Error(`Error ${updateResponse.status}: ${updateResponse.statusText}`);
+        }
         
         // Refresh the purchase data
-        const response = await axios.get(`http://localhost:5000/api/purchases/${id}`);
-        setPurchase(response.data);
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        setPurchase(data);
         setIsPaying(false);
         setSuccessMessage('Purchase has been successfully marked as paid!');
         
@@ -77,9 +141,9 @@ function PurchaseDetails() {
           setSuccessMessage('');
         }, 5000);
       } catch (err) {
+        console.error('Error updating purchase:', err);
         setError('Failed to mark purchase as paid. Please try again later.');
         setIsPaying(false);
-        console.error('Error updating purchase:', err);
       }
     }
   };
@@ -138,7 +202,7 @@ function PurchaseDetails() {
             Delete
           </button>
           <Link
-            to="/"
+            to="/purchases"
             className="px-4 py-2 bg-gray-700 text-gray-200 border border-gray-600 rounded hover:bg-gray-600 transition-colors duration-200 flex items-center"
           >
             <FaArrowLeft className="mr-2" />
@@ -276,7 +340,7 @@ function PurchaseDetails() {
           </h3>
           <p className="mb-1 flex items-center text-gray-300">
             <span className="font-medium mr-2 flex items-center text-gray-200"><FaCalendarAlt className="mr-1 text-gray-400" /> Created At:</span> 
-            {format(new Date(purchase.created_at), 'MMM dd, yyyy HH:mm:ss')}
+            {purchase.created_at && format(new Date(purchase.created_at), 'MMM dd, yyyy HH:mm:ss')}
           </p>
           {purchase.updated_at && (
             <p className="mb-1 flex items-center text-gray-300">
