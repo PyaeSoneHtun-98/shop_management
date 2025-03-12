@@ -6,13 +6,16 @@ import DataTable from 'react-data-table-component';
 import { FaEye, FaCheckCircle, FaEdit, FaTrash, FaCalendarAlt, FaDollarSign, FaPercentage, FaUser, FaClock, FaPlus, FaSearch, FaFileExcel } from 'react-icons/fa';
 import Pagination from './Pagination';
 import * as XLSX from 'xlsx';
+import DatePicker from 'react-datepicker';
+import "react-datepicker/dist/react-datepicker.css";
 
 function PurchaseList() {
   const [purchases, setPurchases] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
-  const [selectedMonth, setSelectedMonth] = useState('');
+  const [startDate, setStartDate] = useState(null);
+  const [endDate, setEndDate] = useState(null);
   const [filterType, setFilterType] = useState('all');
   const [isPaying, setIsPaying] = useState({});
   const [successMessage, setSuccessMessage] = useState('');
@@ -23,34 +26,64 @@ function PurchaseList() {
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
 
+  // Add state to store current user info
+  const [currentUser, setCurrentUser] = useState(null);
+
+  // Add this function at the beginning of your component
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
+
   // Define the fetchPurchases function outside useEffect so it can be reused
   const fetchPurchases = async () => {
     try {
       setLoading(true);
-      // Use fetch API to get raw response
-      const response = await fetch('http://localhost:5000/api/purchases');
-      const rawData = await response.text(); // Get raw response text
+      const response = await fetch('http://localhost:5000/api/purchases', {
+        credentials: 'include',
+        headers: getAuthHeaders()
+      });
       
-      // Parse the JSON manually
-      const purchases = JSON.parse(rawData);
-      
-      // Log some sample dates from the purchases
-      if (purchases.length > 0) {
-        console.log('Sample purchase date from fetch:', purchases[0].id, purchases[0].buy_date);
+      if (!response.ok) {
+        throw new Error(`Error ${response.status}: ${response.statusText}`);
       }
       
-      setPurchases(purchases);
-      setLoading(false);
+      const data = await response.json();
+      setPurchases(data);
     } catch (err) {
-      setError('Failed to fetch purchases. Please try again later.');
-      setLoading(false);
+      setError(err.message);
       console.error('Error fetching purchases:', err);
+    } finally {
+      setLoading(false);
     }
   };
 
   useEffect(() => {
     // Fetch data once when component mounts
     fetchPurchases();
+    
+    // Get current user info
+    const fetchCurrentUser = () => {
+      try {
+        const userString = localStorage.getItem('user');
+        if (userString) {
+          const user = JSON.parse(userString);
+          setCurrentUser(user);
+        }
+      } catch (error) {
+        console.error('Error parsing user from localStorage:', error);
+      }
+    };
+    
+    fetchCurrentUser();
   }, []);
 
   // Handle refresh button click
@@ -58,14 +91,47 @@ function PurchaseList() {
     fetchPurchases();
   };
 
+  // Handle reset button click - clear all filters
+  const handleReset = () => {
+    setSearchTerm('');
+    setStartDate(null);
+    setEndDate(null);
+  };
+
   const handleDelete = async (id) => {
-    if (window.confirm('Are you sure you want to delete this purchase?')) {
+    if (window.confirm('Are you sure you want to delete this purchase? This action cannot be undone.')) {
       try {
-        await axios.delete(`http://localhost:5000/api/purchases/${id}`);
-        setPurchases(purchases.filter(purchase => purchase.id !== id));
+        // Send delete request with proper authentication headers
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          method: 'DELETE',
+          headers: getAuthHeaders(), // Include auth headers
+          credentials: 'include' // Include credentials for cookies
+        });
+        
+        if (!response.ok) {
+          if (response.status === 401) {
+            alert('You are not authorized to delete this purchase. Please log in again.');
+            return;
+          }
+          throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        // After successful deletion, refresh the purchases list
+        await fetchPurchases();
+        
+        // Show success message
+        setSuccessMessage('Purchase successfully deleted!');
+        setTimeout(() => {
+          setSuccessMessage('');
+        }, 5000);
       } catch (err) {
-        setError('Failed to delete purchase. Please try again later.');
         console.error('Error deleting purchase:', err);
+        setError('Failed to delete purchase. Please try again later.');
+        
+        // Clear error after 5 seconds
+        setTimeout(() => {
+          setError(null);
+        }, 5000);
       }
     }
   };
@@ -170,7 +236,7 @@ function PurchaseList() {
   if (loading) return <div className="text-center py-4">Loading...</div>;
   if (error) return <div className="text-red-500 py-4">{error}</div>;
 
-  // Filter purchases based on active tab, search term, and selected month
+  // Filter purchases based on active tab, search term, and date range
   const filteredPurchases = purchases.filter(purchase => {
     // First, filter by tab (immediate vs credit)
     const matchesTab = activeTab === 'immediate' 
@@ -184,16 +250,20 @@ function PurchaseList() {
     const matchesSearch = !searchTerm || 
       (purchase.user_name && purchase.user_name.toLowerCase().includes(searchTerm.toLowerCase()));
     
-    // Then filter by month
-    let matchesMonth = true;
-    if (selectedMonth !== '') {
-      const purchaseDate = new Date(purchase.buy_date);
-      const purchaseMonth = purchaseDate.getMonth().toString();
-      matchesMonth = purchaseMonth === selectedMonth;
+    // Then filter by date range
+    let matchesDateRange = true;
+    if (startDate && purchase.buy_date) {
+      matchesDateRange = new Date(purchase.buy_date) >= startDate;
+    }
+    if (endDate && purchase.buy_date && matchesDateRange) {
+      // Add one day to end date to include the end date in the range
+      const endDateObj = new Date(endDate);
+      endDateObj.setDate(endDateObj.getDate() + 1);
+      matchesDateRange = new Date(purchase.buy_date) < endDateObj;
     }
     
     // Include only if it matches all filters
-    return matchesTab && matchesSearch && matchesMonth;
+    return matchesTab && matchesSearch && matchesDateRange;
   });
 
   // Define columns based on active tab
@@ -244,31 +314,42 @@ function PurchaseList() {
     },
     {
       name: 'Actions',
-      cell: row => (
-        <div className="flex space-x-3">
-          <Link
-            to={`/purchases/${row.id}`}
-            className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center"
-            title="View Details"
-          >
-            <FaEye />
-          </Link>
-          <Link
-            to={`/edit/${row.id}`}
-            className="text-green-600 hover:text-green-800 transition-colors duration-200 flex items-center"
-            title="Edit Purchase"
-          >
-            <FaEdit />
-          </Link>
-          <button
-            onClick={() => handleDelete(row.id)}
-            className="text-red-600 hover:text-red-800 transition-colors duration-200 flex items-center"
-            title="Delete Purchase"
-          >
-            <FaTrash />
-          </button>
-        </div>
-      )
+      cell: row => {
+        // Fix: Ensure admin users can see all action icons
+        // Check both role property and string comparison
+        const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === "admin");
+        
+        return (
+          <div className="flex space-x-3">
+            <Link
+              to={`/purchases/${row.id}`}
+              className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center"
+              title="View Details"
+            >
+              <FaEye />
+            </Link>
+            
+            {isAdmin && (
+              <>
+                <Link
+                  to={`/edit/${row.id}`}
+                  className="text-green-600 hover:text-green-800 transition-colors duration-200 flex items-center"
+                  title="Edit Purchase"
+                >
+                  <FaEdit />
+                </Link>
+                <button
+                  onClick={() => handleDelete(row.id)}
+                  className="text-red-600 hover:text-red-800 transition-colors duration-200 flex items-center"
+                  title="Delete Purchase"
+                >
+                  <FaTrash />
+                </button>
+              </>
+            )}
+          </div>
+        );
+      }
     }
   ];
 
@@ -371,52 +452,63 @@ function PurchaseList() {
     },
     {
       name: 'Actions',
-      cell: row => (
-        <div className="flex space-x-3">
-          <Link
-            to={`/purchases/${row.id}`}
-            className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center"
-            title="View Details"
-          >
-            <FaEye />
-          </Link>
-          <Link
-            to={`/edit/${row.id}`}
-            className="text-green-600 hover:text-green-800 transition-colors duration-200 flex items-center"
-            title="Edit Purchase"
-          >
-            <FaEdit />
-          </Link>
-          {!row.paid_date ? (
-            <button
-              onClick={() => handleMarkAsPaid(row.id)}
-              disabled={isPaying[row.id]}
-              className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center disabled:opacity-50"
-              title="Mark as Paid"
+      cell: row => {
+        // Fix: Ensure admin users can see all action icons
+        // Check both role property and string comparison
+        const isAdmin = currentUser && (currentUser.role === 'admin' || currentUser.role === "admin");
+        
+        return (
+          <div className="flex space-x-3">
+            <Link
+              to={`/purchases/${row.id}`}
+              className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center"
+              title="View Details"
             >
-              <FaCheckCircle />
-            </button>
-          ) : (
-            <button
-              onClick={() => handleUndoPayment(row.id)}
-              disabled={isPaying[row.id]}
-              className="text-yellow-600 hover:text-yellow-800 transition-colors duration-200 flex items-center disabled:opacity-50"
-              title="Undo Payment"
-            >
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
-              </svg>
-            </button>
-          )}
-          <button
-            onClick={() => handleDelete(row.id)}
-            className="text-red-600 hover:text-red-800 transition-colors duration-200 flex items-center"
-            title="Delete Purchase"
-          >
-            <FaTrash />
-          </button>
-        </div>
-      )
+              <FaEye />
+            </Link>
+            
+            {isAdmin && (
+              <>
+                <Link
+                  to={`/edit/${row.id}`}
+                  className="text-green-600 hover:text-green-800 transition-colors duration-200 flex items-center"
+                  title="Edit Purchase"
+                >
+                  <FaEdit />
+                </Link>
+                {!row.paid_date ? (
+                  <button
+                    onClick={() => handleMarkAsPaid(row.id)}
+                    disabled={isPaying[row.id]}
+                    className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center disabled:opacity-50"
+                    title="Mark as Paid"
+                  >
+                    <FaCheckCircle />
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => handleUndoPayment(row.id)}
+                    disabled={isPaying[row.id]}
+                    className="text-yellow-600 hover:text-yellow-800 transition-colors duration-200 flex items-center disabled:opacity-50"
+                    title="Undo Payment"
+                  >
+                    <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />
+                    </svg>
+                  </button>
+                )}
+                <button
+                  onClick={() => handleDelete(row.id)}
+                  className="text-red-600 hover:text-red-800 transition-colors duration-200 flex items-center"
+                  title="Delete Purchase"
+                >
+                  <FaTrash />
+                </button>
+              </>
+            )}
+          </div>
+        );
+      }
     }
   ];
 
@@ -503,38 +595,42 @@ function PurchaseList() {
       try {
         setIsPaying(prev => ({ ...prev, [id]: true }));
         
-        // Get the current purchase data - Use a direct fetch to get raw response
-        const response = await fetch(`http://localhost:5000/api/purchases/${id}`);
-        const rawData = await response.text(); // Get raw response text
-        console.log('Raw response data:', rawData); // Log the raw text
+        // Get the current purchase data with proper auth headers
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
         
-        // Parse the JSON manually
-        const purchase = JSON.parse(rawData);
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${await response.text()}`);
+        }
         
+        const purchase = await response.json();
         console.log('Parsed purchase data from server:', purchase);
-        console.log('Original buy_date string:', purchase.buy_date);
         
         // Get today's date for paid_date
         const today = new Date().toISOString().split('T')[0];
         
         // Create a new object using the exact buy_date string from the purchase
         const purchaseData = {
-          user_id: purchase.user_id,
-          buy_date: purchase.buy_date, // Use the raw string
-          immediate: false,
+          customer_id: purchase.customer_id,
+          buy_date: purchase.buy_date,
+          immediate: purchase.immediate,
           interest_percentage: purchase.interest_percentage,
           total_amount: parseFloat(purchase.total_amount),
           paid_date: today
         };
         
-        console.log('Sending exact data to server:', purchaseData);
+        console.log('Sending data to server:', purchaseData);
         
-        // Use fetch for the update too to avoid automatic conversions
+        // Use fetch for the update with auth headers
         const updateResponse = await fetch(`http://localhost:5000/api/purchases/${id}`, {
           method: 'PUT',
           headers: {
+            ...getAuthHeaders(),
             'Content-Type': 'application/json'
           },
+          credentials: 'include',
           body: JSON.stringify(purchaseData)
         });
         
@@ -553,9 +649,9 @@ function PurchaseList() {
           setSuccessMessage('');
         }, 5000);
       } catch (err) {
+        console.error('Error marking purchase as paid:', err);
         setError('Failed to mark purchase as paid. Please try again later.');
         setIsPaying(prev => ({ ...prev, [id]: false }));
-        console.error('Error updating purchase:', err);
       }
     }
   };
@@ -566,40 +662,15 @@ function PurchaseList() {
       try {
         setIsPaying(prev => ({ ...prev, [id]: true }));
         
-        // Get the current purchase data - Use a direct fetch to get raw response
-        const response = await fetch(`http://localhost:5000/api/purchases/${id}`);
-        const rawData = await response.text(); // Get raw response text
-        console.log('Raw response data for undo:', rawData); // Log the raw text
-        
-        // Parse the JSON manually
-        const purchase = JSON.parse(rawData);
-        
-        console.log('Parsed purchase data for undo:', purchase);
-        console.log('Original buy_date string for undo:', purchase.buy_date);
-        
-        // Create a new object using the exact buy_date string from the purchase
-        const purchaseData = {
-          user_id: purchase.user_id,
-          buy_date: purchase.buy_date, // Use the raw string
-          immediate: false,
-          interest_percentage: purchase.interest_percentage,
-          total_amount: parseFloat(purchase.total_amount),
-          paid_date: null
-        };
-        
-        console.log('Sending exact data to server for undo:', purchaseData);
-        
-        // Use fetch for the update too to avoid automatic conversions
-        const updateResponse = await fetch(`http://localhost:5000/api/purchases/${id}`, {
+        // Use the dedicated endpoint for undoing payments
+        const response = await fetch(`http://localhost:5000/api/purchases/${id}/undo-payment`, {
           method: 'PUT',
-          headers: {
-            'Content-Type': 'application/json'
-          },
-          body: JSON.stringify(purchaseData)
+          headers: getAuthHeaders(),
+          credentials: 'include'
         });
         
-        if (!updateResponse.ok) {
-          throw new Error(`Server returned ${updateResponse.status}: ${await updateResponse.text()}`);
+        if (!response.ok) {
+          throw new Error(`Server returned ${response.status}: ${await response.text()}`);
         }
         
         // Fetch all purchases again to ensure we have the latest data
@@ -613,9 +684,9 @@ function PurchaseList() {
           setSuccessMessage('');
         }, 5000);
       } catch (err) {
+        console.error('Error undoing payment:', err);
         setError('Failed to undo payment. Please try again later.');
         setIsPaying(prev => ({ ...prev, [id]: false }));
-        console.error('Error updating purchase:', err);
       }
     }
   };
@@ -641,63 +712,16 @@ function PurchaseList() {
             Purchase History
           </h2>
         </div>
-        <Link
-          to="/add"
-          className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors duration-200 flex items-center w-full sm:w-auto justify-center"
-        >
-          <FaPlus className="mr-2" />
-          Add New Purchase
-        </Link>
-      </div>
-    
-      <div className="flex flex-col sm:flex-row flex-wrap gap-4 mb-6 items-center">
-        <div className="w-full sm:flex-1 min-w-[200px]">
-          <div className="relative">
-            <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by user name..."
-              className="w-full pl-10 pr-4 py-2 bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
-          </div>
-        </div>
-    
-        <div className="w-full sm:w-[200px]">
-          <select
-            className="w-full px-4 py-2 bg-gray-800 border border-gray-700 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-          >
-            <option value="">All Months</option>
-            <option value="0">January</option>
-            <option value="1">February</option>
-            <option value="2">March</option>
-            <option value="3">April</option>
-            <option value="4">May</option>
-            <option value="5">June</option>
-            <option value="6">July</option>
-            <option value="7">August</option>
-            <option value="8">September</option>
-            <option value="9">October</option>
-            <option value="10">November</option>
-            <option value="11">December</option>
-          </select>
-        </div>
-
-        <div className="w-full sm:w-auto flex gap-2">
-          <button
-            onClick={handleRefresh}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap"
-            title="Refresh Data"
-            disabled={loading}
-          >
-            <svg xmlns="http://www.w3.org/2000/svg" className={`h-5 w-5 mr-2 ${loading ? 'animate-spin' : ''}`} fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
-            </svg>
-            {loading ? 'Loading...' : 'Refresh'}
-          </button>
+        <div className="flex flex-col sm:flex-row gap-2 w-full sm:w-auto">
+          {currentUser?.role === 'admin' && (
+            <Link
+              to="/add"
+              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap"
+            >
+              <FaPlus className="mr-2" />
+              Add New Purchase
+            </Link>
+          )}
           
           <button
             onClick={handleExportToExcel}
@@ -708,6 +732,68 @@ function PurchaseList() {
             Export to Excel
           </button>
         </div>
+      </div>
+    
+      <div className="flex flex-col sm:flex-row gap-4 mb-6 items-center bg-gray-800 p-3 rounded-lg">
+        <div className="flex items-center w-full sm:w-auto">
+          <label htmlFor="startDate" className="text-gray-300 mr-2 whitespace-nowrap font-medium">From :</label>
+          <div className="relative w-full">
+            <DatePicker
+              id="startDate"
+              selected={startDate}
+              onChange={date => setStartDate(date)}
+              placeholderText="DD-MM-YYYY"
+              dateFormat="dd-MM-yyyy"
+              showMonthDropdown
+              showYearDropdown
+              dropdownMode="select"
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200 pr-10"
+            />
+            <FaCalendarAlt className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+        </div>
+        
+        <div className="flex items-center w-full sm:w-auto">
+          <label htmlFor="endDate" className="text-gray-300 mr-2 whitespace-nowrap font-medium">To :</label>
+          <div className="relative w-full">
+            <DatePicker
+              id="endDate"
+              selected={endDate}
+              onChange={date => setEndDate(date)}
+              placeholderText="DD-MM-YYYY"
+              dateFormat="dd-MM-yyyy"
+              showMonthDropdown
+              showYearDropdown
+              dropdownMode="select"
+              className="w-full px-4 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200 pr-10"
+            />
+            <FaCalendarAlt className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 pointer-events-none" />
+          </div>
+        </div>
+
+        <div className="w-full sm:flex-1">
+          <div className="relative">
+            <FaSearch className="absolute left-3 top-1/2 transform -translate-y-1/2 text-gray-400" />
+            <input
+              type="text"
+              placeholder="Search"
+              className="w-full pl-10 pr-4 py-2 bg-gray-700 border border-gray-600 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent text-gray-200"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+          </div>
+        </div>
+
+        <button
+          onClick={handleReset}
+          className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 transition-colors duration-200 flex items-center justify-center whitespace-nowrap"
+          title="Reset Filters"
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          </svg>
+          Reset
+        </button>
       </div>
       
       {/* Tabs */}

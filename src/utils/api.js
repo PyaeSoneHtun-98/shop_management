@@ -8,16 +8,25 @@ const api = axios.create({
   timeout: 10000, // 10 seconds timeout
   headers: {
     'Content-Type': 'application/json'
-  }
+  },
+  withCredentials: true, // Important for cookies
 });
 
-// Add a request interceptor
+// Add a request interceptor to include the token in all requests
 api.interceptors.request.use(
-  config => {
-    // You can add auth tokens here if needed
+  (config) => {
+    // Get token from localStorage
+    const token = localStorage.getItem('token');
+    
+    // If token exists, add it to the headers
+    if (token) {
+      config.headers.Authorization = `Bearer ${token}`;
+    }
+    
+    console.log('Making request with headers:', config.headers);
     return config;
   },
-  error => {
+  (error) => {
     return Promise.reject(error);
   }
 );
@@ -37,30 +46,35 @@ api.interceptors.response.use(
       const status = error.response.status;
       const data = error.response.data;
       
+      console.error(`API Error ${status}:`, data);
+      
       switch (status) {
         case 400:
-          errorMessage = data.error || 'Bad request';
+          errorMessage = data.error || data.message || 'Bad request';
           break;
         case 401:
           errorMessage = 'Unauthorized. Please log in again';
+          // Could also redirect to login page here
           break;
         case 403:
           errorMessage = 'You do not have permission to access this resource';
           break;
         case 404:
-          errorMessage = data.error || 'Resource not found';
+          errorMessage = data.error || data.message || 'Resource not found';
           break;
         case 500:
-          errorMessage = data.error || 'Server error. Please try again later';
+          errorMessage = data.error || data.message || 'Server error. Please try again later';
           break;
         default:
-          errorMessage = data.error || `Error ${status}: Something went wrong`;
+          errorMessage = data.error || data.message || `Error ${status}: Something went wrong`;
       }
     } else if (error.request) {
       // The request was made but no response was received
+      console.error('No response received:', error.request);
       errorMessage = 'No response from server. Please check your connection';
     } else {
       // Something happened in setting up the request that triggered an Error
+      console.error('Request setup error:', error.message);
       errorMessage = error.message;
     }
     
@@ -70,6 +84,20 @@ api.interceptors.response.use(
     return Promise.reject(error);
   }
 );
+
+// Helper function to get auth headers (for use with fetch API)
+export const getAuthHeaders = () => {
+  const token = localStorage.getItem('token');
+  const headers = {
+    'Content-Type': 'application/json'
+  };
+  
+  if (token) {
+    headers['Authorization'] = `Bearer ${token}`;
+  }
+  
+  return headers;
+};
 
 // API methods
 export const fetchUser = async (id) => {

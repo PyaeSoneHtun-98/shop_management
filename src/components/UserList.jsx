@@ -1,41 +1,71 @@
 import { useState, useEffect } from 'react';
-import { Link } from 'react-router-dom';
+import { Link, useLocation } from 'react-router-dom';
 import axios from 'axios';
 import DataTable from 'react-data-table-component';
-import { FaEye, FaEdit, FaTrash, FaUser, FaPhone, FaPlus, FaSearch, FaFileExcel } from 'react-icons/fa';
+import { FaEye, FaEdit, FaTrash, FaUser, FaPhone, FaPlus, FaSearch, FaFileExcel, FaEnvelope, FaUserShield } from 'react-icons/fa';
 import { CiLocationOn } from "react-icons/ci";
 import Pagination from './Pagination';
 import * as XLSX from 'xlsx';
 
 function UserList() {
-  const [users, setUsers] = useState([]);
+  const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
   const [searchTerm, setSearchTerm] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [rowsPerPage, setRowsPerPage] = useState(10);
+  const location = useLocation();
+
+  // Determine if we're on the customers page or users page
+  const isCustomersPage = location.pathname.includes('/customers');
+  const endpoint = isCustomersPage ? 'customers' : 'users';
+  const pageTitle = isCustomersPage ? 'Customers' : 'Users';
+
+  // Add auth headers function
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
 
   useEffect(() => {
-    const fetchUsers = async () => {
+    const fetchItems = async () => {
       try {
-        const response = await axios.get('http://localhost:5000/api/users');
-        setUsers(response.data);
-        setLoading(false);
+        setLoading(true);
+        const response = await fetch(`http://localhost:5000/api/${endpoint}`, {
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        setItems(data);
       } catch (err) {
-        setError('Failed to fetch users. Please try again later.');
+        console.error(`Error fetching ${pageTitle.toLowerCase()}:`, err);
+        setError(err.message);
+      } finally {
         setLoading(false);
-        console.error('Error fetching users:', err);
       }
     };
-
-    fetchUsers();
-  }, []);
+    
+    fetchItems();
+  }, [endpoint, pageTitle]);
 
   const handleDelete = async (id) => {
     if (window.confirm('Are you sure you want to delete this user?')) {
       try {
-        await axios.delete(`http://localhost:5000/api/users/${id}`);
-        setUsers(users.filter(user => user.id !== id));
+        await axios.delete(`http://localhost:5000/api/${endpoint}/${id}`);
+        setItems(items.filter(item => item.id !== id));
       } catch (err) {
         setError('Failed to delete user. Please try again later.');
         console.error('Error deleting user:', err);
@@ -45,11 +75,11 @@ function UserList() {
 
   const handleExportToExcel = () => {
     // Prepare data for export
-    const exportData = filteredUsers.map(user => ({
-      'Name': user.name,
-      'Email': user.email || '-',
-      'Phone': user.phone || '-',
-      'Address': user.address || '-'
+    const exportData = items.map(item => ({
+      'Name': item.name,
+      'Email': item.email || '-',
+      'Phone': item.phone || '-',
+      'Address': item.address || '-'
     }));
 
     // Create worksheet
@@ -63,8 +93,8 @@ function UserList() {
     XLSX.writeFile(workbook, 'user_list.xlsx');
   };
 
-  const filteredUsers = users.filter(user => {
-    return user.name.toLowerCase().includes(searchTerm.toLowerCase());
+  const filteredItems = items.filter(item => {
+    return item.name.toLowerCase().includes(searchTerm.toLowerCase());
   });
 
   const columns = [
@@ -73,20 +103,19 @@ function UserList() {
       selector: row => row.name,
       sortable: true,
       cell: row => (
-        <div className="flex items-center">
-          <FaUser className="text-gray-400 mr-2" />
-          <span className="font-medium text-gray-200">{row.name}</span>
+        <div className="py-1">
+          <div className="font-medium text-white">{row.name}</div>
         </div>
       )
     },
     {
-      name: 'Address',
-      selector: row => row.address,
+      name: 'Email',
+      selector: row => row.email,
       sortable: true,
       cell: row => (
-        <div className="flex items-center">
-          <CiLocationOn className="text-gray-400 mr-2" />
-          <span className="text-gray-300">{row.address}</span>
+        <div className="flex items-center space-x-1 text-gray-300">
+          <FaEnvelope className="text-blue-400" />
+          <span>{row.email || 'N/A'}</span>
         </div>
       )
     },
@@ -95,9 +124,26 @@ function UserList() {
       selector: row => row.phone,
       sortable: true,
       cell: row => (
+        <div className="flex items-center space-x-1 text-gray-300">
+          <FaPhone className="text-green-400" />
+          <span>{row.phone || 'N/A'}</span>
+        </div>
+      )
+    },
+    {
+      name: 'Role',
+      selector: row => row.role,
+      sortable: true,
+      cell: row => (
         <div className="flex items-center">
-          <FaPhone className="text-gray-400 mr-2" />
-          <span className="text-gray-300">{row.phone || 'N/A'}</span>
+          <span className={`px-2 py-1 rounded-full text-xs font-semibold ${
+            row.role === 'admin' 
+              ? 'bg-purple-900 text-purple-300' 
+              : 'bg-blue-900 text-blue-300'
+          }`}>
+            <FaUserShield className="inline mr-1" />
+            {row.role || 'User'}
+          </span>
         </div>
       )
     },
@@ -106,14 +152,14 @@ function UserList() {
       cell: row => (
         <div className="flex space-x-3">
           <Link
-            to={`/users/${row.id}`}
+            to={`/${endpoint}/${row.id}`}
             className="text-blue-600 hover:text-blue-800 transition-colors duration-200 flex items-center"
             title="View Details"
           >
             <FaEye />
           </Link>
           <Link
-            to={`/users/edit/${row.id}`}
+            to={`/${endpoint}/edit/${row.id}`}
             className="text-green-600 hover:text-green-800 transition-colors duration-200 flex items-center"
             title="Edit User"
           >
@@ -140,15 +186,15 @@ function UserList() {
         <div className="flex items-center space-x-4">
           <h2 className="text-xl sm:text-2xl font-semibold text-white flex items-center">
             <FaUser className="mr-2 text-blue-400" />
-            User List
+            {pageTitle} List
           </h2>
         </div>
         <Link
-          to="/users/add"
+          to={`/${endpoint}/add`}
           className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 transition-colors duration-200 flex items-center w-full sm:w-auto justify-center"
         >
           <FaPlus className="mr-2" />
-          Add New User
+          Add New {pageTitle}
         </Link>
       </div>
 
@@ -178,15 +224,15 @@ function UserList() {
         </div>
       </div>
 
-      {users.length === 0 ? (
+      {items.length === 0 ? (
         <div className="py-8 text-center bg-gray-800 rounded-lg border border-gray-700">
-          <p className="text-gray-300">No users found. Add a new user to get started.</p>
+          <p className="text-gray-300">No {pageTitle} found. Add a new {pageTitle} to get started.</p>
         </div>
       ) : (
         <div className="overflow-x-auto">
           <DataTable
             columns={columns}
-            data={filteredUsers.slice(
+            data={filteredItems.slice(
               (currentPage - 1) * rowsPerPage,
               currentPage * rowsPerPage
             )}
@@ -272,7 +318,7 @@ function UserList() {
           {/* Custom pagination component */}
           <Pagination
             currentPage={currentPage}
-            totalRows={filteredUsers.length}
+            totalRows={filteredItems.length}
             rowsPerPage={rowsPerPage}
             onChangePage={setCurrentPage}
             onChangeRowsPerPage={setRowsPerPage}

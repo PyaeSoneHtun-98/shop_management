@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useParams, Link, useNavigate } from 'react-router-dom';
+import { useParams, Link, useNavigate, useLocation } from 'react-router-dom';
 import { format } from 'date-fns';
 import DataTable from 'react-data-table-component';
 import { FaUser, FaEnvelope, FaPhone, FaMapMarkerAlt, FaEdit, FaTrash, FaArrowLeft, FaCalendarAlt, FaDollarSign, FaPercentage, FaClock, FaEye, FaCheckCircle, FaShoppingCart, FaShoppingBag } from 'react-icons/fa';
@@ -10,6 +10,7 @@ import axios from 'axios';
 function UserDetails() {
   const { id } = useParams();
   const navigate = useNavigate();
+  const location = useLocation();
   const [user, setUser] = useState(null);
   const [purchases, setPurchases] = useState([]);
   const [loading, setLoading] = useState(true);
@@ -20,18 +21,44 @@ function UserDetails() {
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [activeTab, setActiveTab] = useState('immediate'); // 'immediate' or 'credit'
 
+  // Determine if we're on the customers page or users page
+  const isCustomersPage = location.pathname.includes('/customers');
+  const endpoint = isCustomersPage ? 'customers' : 'users';
+  const itemType = isCustomersPage ? 'Customer' : 'User';
+
+  // Add auth headers function
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
+
   useEffect(() => {
     const fetchUserAndPurchases = async () => {
       try {
+        setLoading(true);
         // Fetch user details
-        const userResponse = await fetch(`http://localhost:5000/api/users/${id}`);
+        const userResponse = await fetch(`http://localhost:5000/api/${endpoint}/${id}`, {
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
         const userRawData = await userResponse.text();
         console.log('Raw user data:', userRawData);
         const userData = JSON.parse(userRawData);
         setUser(userData);
 
         // Fetch user's purchases
-        const purchasesResponse = await fetch(`http://localhost:5000/api/purchases/user/${id}`);
+        const purchasesResponse = await fetch(`http://localhost:5000/api/purchases/user/${id}`, {
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
         const purchasesRawData = await purchasesResponse.text();
         console.log('Raw purchases data:', purchasesRawData);
         const purchasesData = JSON.parse(purchasesRawData);
@@ -45,14 +72,14 @@ function UserDetails() {
         
         setLoading(false);
       } catch (err) {
-        console.error('Error fetching user details:', err);
+        console.error(`Error fetching ${itemType.toLowerCase()} details:`, err);
         setError(err.message || 'Failed to fetch user details. Please try again later.');
         setLoading(false);
       }
     };
 
     fetchUserAndPurchases();
-  }, [id]);
+  }, [id, endpoint, itemType]);
 
   const handleDelete = async () => {
     if (window.confirm('Are you sure you want to delete this user?')) {
@@ -386,7 +413,9 @@ function UserDetails() {
         setIsPaying(prev => ({ ...prev, [purchaseId]: true }));
         
         // Get the current purchase data
-        const response = await axios.get(`http://localhost:5000/api/purchases/${purchaseId}`);
+        const response = await axios.get(`http://localhost:5000/api/purchases/${purchaseId}`, {
+          headers: getAuthHeaders()
+        });
         const purchase = response.data;
         
         // Log the exact date format received from the server
@@ -409,10 +438,10 @@ function UserDetails() {
         console.log('Sending to server:', purchaseData);
         
         // Update the purchase using our API utility
-        await updatePurchase(purchaseId, purchaseData);
+        await updatePurchase(purchaseId, purchaseData, getAuthHeaders());
         
         // Fetch user's purchases again to ensure we have the latest data
-        const purchasesData = await fetchUserPurchases(id);
+        const purchasesData = await fetchUserPurchases(id, getAuthHeaders());
         
         // Log the updated purchase to verify the date wasn't changed
         const updatedPurchase = purchasesData.find(p => p.id === purchaseId);
@@ -443,7 +472,9 @@ function UserDetails() {
         setIsPaying(prev => ({ ...prev, [purchaseId]: true }));
         
         // Get the current purchase data
-        const response = await axios.get(`http://localhost:5000/api/purchases/${purchaseId}`);
+        const response = await axios.get(`http://localhost:5000/api/purchases/${purchaseId}`, {
+          headers: getAuthHeaders()
+        });
         const purchase = response.data;
         
         // Log the exact date format received from the server
@@ -463,10 +494,10 @@ function UserDetails() {
         console.log('Sending to server for undo:', purchaseData);
         
         // Update the purchase using our API utility
-        await updatePurchase(purchaseId, purchaseData);
+        await updatePurchase(purchaseId, purchaseData, getAuthHeaders());
         
         // Fetch user's purchases again to ensure we have the latest data
-        const purchasesData = await fetchUserPurchases(id);
+        const purchasesData = await fetchUserPurchases(id, getAuthHeaders());
         
         // Log the updated purchase to verify the date wasn't changed
         const updatedPurchase = purchasesData.find(p => p.id === purchaseId);

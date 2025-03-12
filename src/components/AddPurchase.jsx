@@ -1,38 +1,60 @@
 import { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import axios from 'axios';
 import { FaArrowLeft, FaSave, FaExclamationTriangle } from 'react-icons/fa';
 
 function AddPurchase() {
   const navigate = useNavigate();
-  const [users, setUsers] = useState([]);
+  const [customers, setCustomers] = useState([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState(null);
   const [paymentType, setPaymentType] = useState('immediate'); // 'immediate' or 'credit'
   
   const [formData, setFormData] = useState({
-    user_id: '',
+    customer_id: '',
     buy_date: new Date().toISOString().split('T')[0], // Set default to today
-    immediate: paymentType === 'immediate',
+    immediate: true,
     interest_percentage: 3, // Default interest percentage
     total_amount: ''
   });
 
+  // Add auth headers function
+  const getAuthHeaders = () => {
+    const token = localStorage.getItem('token');
+    const headers = {
+      'Content-Type': 'application/json'
+    };
+    
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    
+    return headers;
+  };
+
   useEffect(() => {
-    const fetchUsers = async () => {
+    const fetchCustomers = async () => {
       try {
-        const response = await axios.get('http://localhost:5000/api/users');
-        setUsers(response.data);
+        const response = await fetch('http://localhost:5000/api/customers', {
+          credentials: 'include',
+          headers: getAuthHeaders()
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Error ${response.status}: ${response.statusText}`);
+        }
+        
+        const data = await response.json();
+        setCustomers(data);
         setLoading(false);
       } catch (err) {
-        console.error('Error fetching users:', err);
-        setError('Failed to load users. Please try again later.');
+        console.error('Error fetching customers:', err);
+        setError('Failed to load customers. Please try again later.');
         setLoading(false);
       }
     };
     
-    fetchUsers();
+    fetchCustomers();
   }, []);
 
   const handleChange = (e) => {
@@ -49,13 +71,13 @@ function AddPurchase() {
     setFormData(prev => ({
       ...prev,
       immediate: type === 'immediate',
-      interest_percentage: type === 'immediate' ? 0 : 3 // Reset to default 10% for credit
+      interest_percentage: type === 'immediate' ? 0 : 3 // Reset to default 3% for credit
     }));
   };
 
   const handleInterestPercentageChange = (e) => {
-    const value = parseInt(e.target.value);
-    if (value >= 0 && value <= 100) {
+    const value = parseFloat(e.target.value);
+    if (!isNaN(value) && value >= 0 && value <= 100) {
       setFormData(prev => ({
         ...prev,
         interest_percentage: value
@@ -69,47 +91,50 @@ function AddPurchase() {
     setError(null);
     
     try {
-      // Format dates properly
-      const formatDate = (dateStr) => dateStr ? new Date(dateStr).toISOString().split('T')[0] : null;
+      // Parse the numeric values from text inputs
+      const totalAmount = parseFloat(formData.total_amount);
+      const interestPercentage = paymentType === 'immediate' ? 0 : parseFloat(formData.interest_percentage);
+      
+      // Validate numbers
+      if (isNaN(totalAmount) || totalAmount <= 0) {
+        throw new Error('Please enter a valid principal amount greater than 0');
+      }
+      
+      if (paymentType === 'credit' && (isNaN(interestPercentage) || interestPercentage < 0)) {
+        throw new Error('Please enter a valid interest percentage (0 or greater)');
+      }
       
       // Prepare data for submission
       const purchaseData = {
-        user_id: formData.user_id,
-        buy_date: formatDate(formData.buy_date),
+        customer_id: formData.customer_id,
+        buy_date: formData.buy_date,
         immediate: paymentType === 'immediate',
-        interest_percentage: paymentType === 'immediate' ? 0 : formData.interest_percentage,
-        total_amount: parseFloat(formData.total_amount)
+        interest_percentage: interestPercentage,
+        total_amount: totalAmount
       };
       
       console.log('Submitting purchase data:', purchaseData);
       
-      const response = await axios.post('http://localhost:5000/api/purchases', purchaseData);
-      console.log('Purchase created successfully:', response.data);
+      const response = await fetch('http://localhost:5000/api/purchases', {
+        method: 'POST',
+        headers: {
+          ...getAuthHeaders(),
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify(purchaseData),
+        credentials: 'include'
+      });
       
-      navigate('/');
-    } catch (err) {
-      console.error('Error adding purchase:', err);
-      
-      // Extract error message from response if available
-      let errorMessage = 'Failed to add purchase. Please check your inputs and try again.';
-      
-      if (err.response) {
-        // The request was made and the server responded with a status code
-        // that falls out of the range of 2xx
-        if (err.response.data && err.response.data.message) {
-          errorMessage = err.response.data.message;
-        } else {
-          errorMessage = `Server error: ${err.response.status}`;
-        }
-      } else if (err.request) {
-        // The request was made but no response was received
-        errorMessage = 'No response from server. Please check your connection.';
-      } else {
-        // Something happened in setting up the request that triggered an Error
-        errorMessage = err.message;
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.message || `Error ${response.status}: ${response.statusText}`);
       }
       
-      setError(errorMessage);
+      navigate('/purchases');
+    } catch (err) {
+      console.error('Error adding purchase:', err);
+      setError(err.message || 'Failed to add purchase. Please check your inputs and try again.');
+    } finally {
       setSubmitting(false);
     }
   };
@@ -129,7 +154,7 @@ function AddPurchase() {
   return (
     <div>
       <div className="mb-6 flex items-center">
-        <Link to="/" className="flex items-center text-blue-400 hover:text-blue-300 mr-4">
+        <Link to="/purchases" className="flex items-center text-blue-400 hover:text-blue-300 mr-4">
           <FaArrowLeft className="mr-2" />
           <span>Back to Purchases</span>
         </Link>
@@ -182,21 +207,21 @@ function AddPurchase() {
           <form onSubmit={handleSubmit}>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
               <div>
-                <label htmlFor="user_id" className="block text-gray-300 text-sm font-medium mb-2">
+                <label htmlFor="customer_id" className="block text-gray-300 text-sm font-medium mb-2">
                   Customer
                 </label>
                 <select
-                  id="user_id"
-                  name="user_id"
-                  value={formData.user_id}
+                  id="customer_id"
+                  name="customer_id"
+                  value={formData.customer_id}
                   onChange={handleChange}
                   required
                   className="w-full bg-gray-700 border border-gray-600 rounded-md py-2 px-3 text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 >
                   <option value="">Select a customer</option>
-                  {users.map(user => (
-                    <option key={user.id} value={user.id}>
-                      {user.name}
+                  {customers.map(customer => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.name}
                     </option>
                   ))}
                 </select>
@@ -222,14 +247,12 @@ function AddPurchase() {
                   Principal Amount
                 </label>
                 <input
-                  type="number"
+                  type="text"
                   id="total_amount"
                   name="total_amount"
                   value={formData.total_amount}
                   onChange={handleChange}
                   required
-                  step="0.01"
-                  min="0.01"
                   className="w-full bg-gray-700 border border-gray-600 rounded-md py-2 px-3 text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                 />
               </div>
@@ -240,14 +263,12 @@ function AddPurchase() {
                     Interest Percentage (%)
                   </label>
                   <input
-                    type="number"
+                    type="text"
                     id="interest_percentage"
                     name="interest_percentage"
                     value={formData.interest_percentage}
-                    onChange={handleInterestPercentageChange}
+                    onChange={handleChange}
                     required
-                    min="0"
-                    max="100"
                     className="w-full bg-gray-700 border border-gray-600 rounded-md py-2 px-3 text-gray-300 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
                   />
                   {formData.total_amount && (
